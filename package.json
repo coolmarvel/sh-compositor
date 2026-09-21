@@ -1,0 +1,97 @@
+{
+  "name": "sh-compositor",
+  "version": "0.1.1",
+  "description": "포토샵형 오프라인 이미지 편집기 — Compositor(MIT, macOS)를 Windows 용으로 옮기고 클래식 업무 UI 로 감싼 것 (가칭)",
+  "author": "이성현",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build && node scripts/obfuscate.cjs",
+    "start": "electron-vite preview",
+    "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
+    "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "node --import tsx --test test/*.test.ts",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"test/**/*.{ts,mjs}\" \"scripts/**/*.cjs\" \"*.{ts,json}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"test/**/*.{ts,mjs}\" \"scripts/**/*.cjs\" \"*.{ts,json}\"",
+    "pack:win": "npm run build && electron-builder --win --dir",
+    "dist:win": "npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.13.5",
+    "@emotion/styled": "^11.13.5",
+    "@imgly/background-removal": "1.4.5",
+    "@imgly/background-removal-data": "1.4.5",
+    "@imgly/background-removal-online": "npm:@imgly/background-removal@^1.7.0",
+    "@mui/icons-material": "^6.1.9",
+    "@mui/material": "^6.1.9",
+    "fflate": "^0.8.3",
+    "heic2any": "^0.0.4",
+    "utif2": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "javascript-obfuscator": "^5.4.7",
+    "prettier": "^3.9.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "xyz.chungmu.shcompositor",
+    "productName": "SH Compositor",
+    "copyright": "Copyright © 2026 이성현",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "node_modules/@imgly/background-removal-data/dist",
+        "to": "bgrm-data"
+      }
+    ],
+    "fileAssociations": [
+      {
+        "ext": "shcomp",
+        "name": "SH Compositor 프로젝트",
+        "role": "Editor",
+        "icon": "build/icon.ico"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SH Compositor",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "license": "build/license.txt",
+      "artifactName": "SH-Compositor-Setup-${version}.${ext}"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- bgrm: = 내장(오프라인) 배경 제거 모델 서빙. https://staticimgly.com = 온라인(최신) 모델 CDN — 사용자가 온라인 모드를 고를 때만 접속.
+         unsafe-eval/wasm-unsafe-eval = onnxruntime-web 실행 요건 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob:; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://staticimgly.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: data: bgrm: https://staticimgly.com"
+    />
+    <title>SH Compositor</title>
+  </head>
+  <body style="background: #2a2c32">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

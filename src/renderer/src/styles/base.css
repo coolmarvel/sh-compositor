@@ -1,0 +1,82 @@
+/*
+ * 전역 기본값 — 값은 전부 tokens.ts 가 주입한 CSS 변수를 쓴다(리터럴 금지).
+ * 규칙 출처: ~/sh-messenger DESIGN.md §2 Foundations, §3 Typography.
+ * 본문 12px 돋움 · keep-all · 앱 크롬은 선택 불가 · 포커스는 안쪽 1px 점선.
+ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--font-md);
+  line-height: 1.45;
+  color: var(--c-text);
+  background: var(--c-canvas);
+  /* 설치형 앱답게: 크롬은 텍스트 선택·손 커서 없음 */
+  user-select: none;
+  cursor: default;
+  overscroll-behavior: none;
+  overflow: hidden;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  /* -webkit-font-smoothing 은 건드리지 않는다 — 작은 비트맵 글꼴 느낌이 클래식의 핵심 (sh-web-editor DESIGN §3) */
+}
+
+button {
+  cursor: default;
+}
+
+input,
+textarea,
+.selectable {
+  user-select: text;
+  cursor: auto;
+}
+
+/* 포커스: 클래식 포커스 사각형 — 안쪽 1px 점선. outline:none 단독 사용 금지 */
+:focus-visible {
+  outline: 1px dotted var(--c-text);
+  outline-offset: -3px;
+}
+
+/* 숫자는 자릿수를 맞춘다 (크기·용량·좌표 표기) */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 클래식 스크롤바 — 직각, 1px 테두리, 베벨 엄지 */
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+::-webkit-scrollbar-track {
+  background: var(--c-sunken);
+  border-left: 1px solid var(--c-border);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--surface-bevel);
+  border: 1px solid var(--c-border-strong);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--c-control-top);
+}
+::-webkit-scrollbar-corner {
+  background: var(--c-sunken);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}

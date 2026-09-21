@@ -1,0 +1,44 @@
+{
+  "_remoteControl": "Remote Control(로컬 세션을 claude.ai/code 에 동기화) 차단 — 대화 내용이 웹에 남지 않게. 2026-09-05 결정",
+  "disableRemoteControl": true,
+  "remoteControlAtStartup": false,
+  "autoUploadSessions": false,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/hooks/env-guard.sh",
+            "blocking": true,
+            "timeout": 5000
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/hooks/git-add-guard.sh",
+            "blocking": true,
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/hooks/format.sh",
+            "timeout": 15000
+          }
+        ]
+      }
+    ]
+  }
+}

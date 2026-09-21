@@ -1,0 +1,34 @@
+﻿SH Compositor
+레이어 기반 오프라인 이미지 편집기
+
+────────────────────────────────────────────────────────
+Copyright © 2026 이성현 (Lee Seong Hyun). All rights reserved.
+제작자 : 이성현
+────────────────────────────────────────────────────────
+
+1. 저작권
+   본 소프트웨어의 저작권은 제작자 이성현에게 있습니다.
+
+2. 오픈소스 고지
+   본 소프트웨어의 설계와 일부 알고리즘은 Compositor
+   (Copyright © 2026 Wonder Assembly LLC) 를 참고해 옮긴 것이며,
+   Compositor 는 MIT 라이선스로 배포됩니다:
+
+   Permission is hereby granted, free of charge, to any person obtaining
+   a copy of this software and associated documentation files, to deal in
+   the Software without restriction, subject to the condition that the
+   above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+   AI 배경 제거: @imgly/background-removal (AGPL-3.0)
+   UI: React, MUI (MIT) · 압축: fflate (MIT)
+
+3. 제한
+   제작자의 사전 동의 없이 본 소프트웨어를 재배포·판매하거나,
+   저작권 표시를 제거·변경할 수 없습니다.
+
+4. 보증의 부인
+   본 소프트웨어는 "있는 그대로(as-is)" 제공되며, 어떠한 명시적·묵시적
+   보증도 하지 않습니다. 사용으로 인한 결과의 책임은 사용자에게 있습니다.
+
+본 설치를 계속하면 위 내용에 동의하는 것으로 간주합니다.
