@@ -20,11 +20,16 @@ import CreateNewFolderOutlined from '@mui/icons-material/CreateNewFolderOutlined
 import ContrastRounded from '@mui/icons-material/ContrastRounded'
 import CropSquareRounded from '@mui/icons-material/CropSquareRounded'
 import AutoAwesomeOutlined from '@mui/icons-material/AutoAwesomeOutlined'
+import GridOnRounded from '@mui/icons-material/GridOnRounded'
+import BrushRounded from '@mui/icons-material/BrushRounded'
+import OpenWithRounded from '@mui/icons-material/OpenWithRounded'
+import LockRounded from '@mui/icons-material/LockRounded'
+import CategoryOutlined from '@mui/icons-material/CategoryOutlined'
 import { editor, useEditor, useDoc } from '../../editor/store'
 import * as A from '../../editor/actions'
 import { displayOrder, getLayer, updateLayer, setActive, moveLayerTo, setBlend, hasEffects, isEffectivelyVisible, BLEND_MODES, ADJUSTMENT_KINDS, type Layer } from '@core/index'
 import { thumbUrl } from './thumb'
-import { selectSx } from '../bar'
+import { selectSx, IconToggle } from '../bar'
 import { ui } from '../../theme'
 
 const { color, chrome, space, font, surface } = ui
@@ -212,6 +217,37 @@ export default function LayersPanel(): JSX.Element {
         onPointerUp={() => editor.endGesture()}
         sx={{ mx: `${space.sm}px`, my: '2px', accentColor: color.accent }}
       />
+      {/* 잠그기 (포토샵과 같은 순서: 투명 픽셀 · 픽셀 · 위치 · 모두) */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: '2px', px: `${space.sm}px`, pb: '3px' }}>
+        <Box component="span" sx={{ color: color.textSecondary, mr: '4px' }}>
+          잠그기
+        </Box>
+        {(
+          [
+            ['alpha', <GridOnRounded key="a" />, '투명 픽셀 잠그기 (있는 픽셀에만 칠해집니다)'],
+            ['pixels', <BrushRounded key="p" />, '픽셀 잠그기 (칠하기·지우기 금지)'],
+            ['position', <OpenWithRounded key="m" />, '위치 잠그기 (이동·변형 금지)']
+          ] as const
+        ).map(([k, icon, tip]) => (
+          <IconToggle
+            key={k}
+            icon={icon}
+            tooltip={tip}
+            on={!!active?.lock?.[k]}
+            onClick={() => doc && active && editor.commit(updateLayer(doc, active.id, { lock: { ...active.lock, [k]: !active.lock?.[k] } }), '레이어 잠금')}
+          />
+        ))}
+        <IconToggle
+          icon={<LockRounded />}
+          tooltip="모두 잠그기"
+          on={!!active?.lock?.alpha && !!active.lock.pixels && !!active.lock.position}
+          onClick={() => {
+            if (!doc || !active) return
+            const all = !!active.lock?.alpha && !!active.lock.pixels && !!active.lock.position
+            editor.commit(updateLayer(doc, active.id, { lock: all ? {} : { alpha: true, pixels: true, position: true } }), '레이어 잠금')
+          }}
+        />
+      </Box>
       {/* 목록 */}
       <Box
         role="listbox"
@@ -321,6 +357,7 @@ export default function LayersPanel(): JSX.Element {
               )}
               <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '3px' }}>
                 {l.kind === 'text' && <TitleRounded sx={{ fontSize: 13, color: color.textSecondary }} />}
+                {l.shape && <CategoryOutlined aria-label="도형" sx={{ fontSize: 13, color: color.textSecondary }} />}
                 {renaming === l.id ? (
                   <Box
                     component="input"
@@ -355,8 +392,9 @@ export default function LayersPanel(): JSX.Element {
                   </Box>
                 )}
               </Box>
+              {l.lock && (l.lock.alpha || l.lock.pixels || l.lock.position) && <LockRounded aria-label="잠김" sx={{ fontSize: 13, color: color.textSecondary }} />}
               {hasEffects(l.effects) && (
-                <Tooltip title="레이어 효과 (더블클릭 = 편집)">
+                <Tooltip title="레이어 효과 (더블클릭하면 고칩니다)">
                   <Box
                     component="span"
                     onDoubleClick={() => editor.set({ dialog: { kind: 'effects', layerId: l.id } })}
@@ -440,8 +478,10 @@ export default function LayersPanel(): JSX.Element {
           { label: '마스크 삭제', run: () => A.deleteMask(false), disabled: !active?.mask },
           null,
           { label: '레이어 효과…', run: () => active && editor.set({ dialog: { kind: 'effects', layerId: active.id } }), disabled: !active?.bitmap },
+          { label: '레이어 효과 복사', run: A.copyLayerStyle, disabled: !active?.effects },
+          { label: '레이어 효과 붙여넣기', run: A.pasteLayerStyle, disabled: !A.hasStyleClip() },
           { label: '픽셀 선택', run: () => active && A.selectLayerPixels(active.id), disabled: !active?.bitmap },
-          { label: '문자 래스터화', run: A.rasterizeText, disabled: active?.kind !== 'text' }
+          { label: '래스터화', run: A.rasterizeText, disabled: active?.kind !== 'text' && !active?.shape }
         ].map((it, i) =>
           it ? (
             <MenuItem

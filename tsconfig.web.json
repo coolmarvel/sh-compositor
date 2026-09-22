@@ -3,7 +3,11 @@
     "composite": true,
     "target": "ES2020",
     "useDefineForClassFields": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
@@ -14,9 +18,19 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@core/*": ["src/core/*"],
-      "@renderer/*": ["src/renderer/src/*"]
-    }
+      "@core/*": [
+        "src/core/*"
+      ],
+      "@renderer/*": [
+        "src/renderer/src/*"
+      ]
+    },
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   },
-  "include": ["src/renderer/**/*", "src/preload/**/*.d.ts", "src/core/**/*"]
+  "include": [
+    "src/renderer/**/*",
+    "src/preload/**/*.d.ts",
+    "src/core/**/*"
+  ]
 }

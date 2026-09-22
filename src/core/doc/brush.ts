@@ -16,9 +16,23 @@ export interface BrushSettings {
   hardness: number
   /** 0~1 — 획 전체 상한 */
   opacity: number
+  /** 펜 필압 → 굵기 (기본 켬) */
+  pressureSize?: boolean
+  /** 펜 필압 → 진하기 (한 점의 덮임에 곱함) */
+  pressureOpacity?: boolean
 }
 
-export const DEFAULT_BRUSH: BrushSettings = { size: 30, hardness: 0.8, opacity: 1 }
+export const DEFAULT_BRUSH: BrushSettings = { size: 30, hardness: 0.8, opacity: 1, pressureSize: true, pressureOpacity: false }
+
+/** 브러시 사전 설정 (도구 옵션 줄의 목록) */
+export const BRUSH_PRESETS: { name: string; brush: Partial<BrushSettings> }[] = [
+  { name: '기본 둥근 브러시', brush: { size: 30, hardness: 0.8, opacity: 1 } },
+  { name: '부드러운 에어브러시', brush: { size: 120, hardness: 0, opacity: 0.35 } },
+  { name: '딱딱한 연필', brush: { size: 3, hardness: 1, opacity: 1 } },
+  { name: '마스크 다듬기', brush: { size: 60, hardness: 0.3, opacity: 1 } },
+  { name: '잉크 펜 (필압 굵기)', brush: { size: 12, hardness: 0.95, opacity: 1, pressureSize: true, pressureOpacity: false } },
+  { name: '수채 (필압 진하기)', brush: { size: 50, hardness: 0.2, opacity: 0.8, pressureSize: false, pressureOpacity: true } }
+]
 
 /** 팁 한 점의 덮임 (d = 중심까지 거리, R = 반지름) */
 export function tipAlpha(d: number, R: number, hardness: number): number {
@@ -38,7 +52,7 @@ export const spacingFor = (s: BrushSettings): number => Math.max(0.5, s.size * (
 export class StrokeCoverage {
   readonly cov: Float32Array
   dirty: { x0: number; y0: number; x1: number; y1: number } | null = null
-  private last: { x: number; y: number } | null = null
+  private last: { x: number; y: number; p: number } | null = null
   private carry = 0
 
   constructor(
@@ -51,7 +65,9 @@ export class StrokeCoverage {
 
   /** 점 하나 찍기 */
   dab(cx: number, cy: number, pressure = 1): void {
-    const R = Math.max(0.5, (this.settings.size * pressure) / 2)
+    const ps = this.settings.pressureSize !== false ? pressure : 1
+    const po = this.settings.pressureOpacity ? pressure : 1
+    const R = Math.max(0.5, (this.settings.size * ps) / 2)
     const x0 = Math.max(0, Math.floor(cx - R - 1))
     const y0 = Math.max(0, Math.floor(cy - R - 1))
     const x1 = Math.min(this.width - 1, Math.ceil(cx + R + 1))
@@ -63,7 +79,7 @@ export class StrokeCoverage {
       const row = y * this.width
       for (let x = x0; x <= x1; x++) {
         const dx = x + 0.5 - cx
-        const a = tipAlpha(Math.sqrt(dx * dx + dy * dy), R, h)
+        const a = tipAlpha(Math.sqrt(dx * dx + dy * dy), R, h) * po
         if (a <= 0) continue
         const i = row + x
         this.cov[i] = this.cov[i] + (1 - this.cov[i]) * a
@@ -77,7 +93,7 @@ export class StrokeCoverage {
   lineTo(x: number, y: number, pressure = 1): void {
     if (!this.last) {
       this.dab(x, y, pressure)
-      this.last = { x, y }
+      this.last = { x, y, p: pressure }
       return
     }
     const step = spacingFor(this.settings)
@@ -85,12 +101,14 @@ export class StrokeCoverage {
     const dy = y - this.last.y
     const len = Math.hypot(dx, dy)
     let t = step - this.carry
+    const p0 = this.last.p
     while (t <= len) {
-      this.dab(this.last.x + (dx * t) / len, this.last.y + (dy * t) / len, pressure)
+      // 필압은 두 점 사이에서 부드럽게 (펜을 누르는 힘이 한 구간 안에서 계단지지 않게)
+      this.dab(this.last.x + (dx * t) / len, this.last.y + (dy * t) / len, p0 + ((pressure - p0) * t) / len)
       t += step
     }
     this.carry = len - (t - step)
-    this.last = { x, y }
+    this.last = { x, y, p: pressure }
   }
 
   takeDirty(): { x: number; y: number; w: number; h: number } | null {

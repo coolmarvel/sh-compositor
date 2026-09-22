@@ -3,7 +3,7 @@ import Button from '@mui/material/Button'
 import Box from '@mui/material/Box'
 import { editor, useEditor, useDoc } from '../editor/store'
 import * as A from '../editor/actions'
-import { bakeLayer, adjustLayer } from '../editor/pixels'
+import { bakeLayer, adjustLayer, editPixels } from '../editor/pixels'
 import { encodeJpeg, encodeWebp, mergedBitmap, saveProject } from '../editor/io'
 import { clearSessionRecovery } from '../editor/autosave'
 import { unpackProject } from '@core/index'
@@ -22,6 +22,15 @@ import {
   DEFAULT_FILTERS,
   DEFAULT_EFFECTS,
   DEFAULT_MATTE,
+  refineMatte,
+  makeSelection,
+  smoothSelection,
+  featherSelection,
+  type Selection,
+  applyMoreAdjust,
+  DEFAULT_MORE,
+  type MoreAdjust,
+  type MoreAdjustKind,
   ADJUSTMENT_KINDS,
   type Adjustments,
   type Filters,
@@ -30,11 +39,14 @@ import {
   type Bitmap,
   type MatteRefine
 } from '@core/index'
-import { ClassicDialog, SliderRow, GroupBox, Row, Note } from './dialogs/parts'
+import { ClassicTabs } from './dialogs/tabs'
+import { ClassicDialog, SliderRow, GroupBox, Row, Note, Lines, Check } from './dialogs/parts'
 import Select from '@mui/material/Select'
 import MenuItem from '@mui/material/MenuItem'
 import { selectSx } from './bar'
 import { checkOnline, type OnlineModel } from '../editor/bgremove'
+import { addGuide } from '../editor/guides'
+import { BarInput, PaletteControl } from './bar'
 import type { Tab as AdjustTab } from './dialogs/AdjustDialog'
 import { ui } from '../theme'
 
@@ -50,6 +62,7 @@ const ColorDialog = lazy(() => import('./dialogs/ColorDialog'))
 const RenameDialog = lazy(() => import('./dialogs/RenameDialog'))
 const ConfirmCloseDialog = lazy(() => import('./dialogs/ConfirmCloseDialog'))
 const AboutDialog = lazy(() => import('./dialogs/AboutDialog'))
+const HelpDialog = lazy(() => import('./dialogs/HelpDialog'))
 
 const { color, font } = ui
 const close = (): void => editor.set({ dialog: null })
@@ -133,9 +146,9 @@ function AdjustHost({ tab, layerId }: { tab: AdjustTab; layerId?: string }): JSX
       mask: mask ? { bitmap: mask, enabled: true, linked: false } : null
     })
     const idx = doc.layers.findIndex((l) => l.id === target.id)
-    editor.set({ preview: { ...doc, layers: [...doc.layers.slice(0, idx + 1), tmp, ...doc.layers.slice(idx + 1)] } })
+    editor.setPreview({ ...doc, layers: [...doc.layers.slice(0, idx + 1), tmp, ...doc.layers.slice(idx + 1)] })
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => editor.set({ preview: null }), [])
+  useEffect(() => () => editor.setPreview(null), [])
 
   if (!doc) return null
   if (adjLayer?.adjustment) {
@@ -165,13 +178,13 @@ function AdjustHost({ tab, layerId }: { tab: AdjustTab; layerId?: string }): JSX
       hist={hist}
       sample={sample}
       initialTab={tab}
-      title={`보정 — ${target.name}${doc.selection ? ' (선택 영역)' : ''}`}
+      title={`${target.name} 보정${doc.selection ? ' (선택 영역만)' : ''}`}
       onChange={(a) => {
         latest.current = a
         setValue(a)
       }}
       onClose={() => {
-        editor.set({ preview: null })
+        editor.setPreview(null)
         close()
         // 취소면 DEFAULT 로 되돌아온 상태 = 바뀐 것 없음
         const d = editor.doc
@@ -183,7 +196,7 @@ function AdjustHost({ tab, layerId }: { tab: AdjustTab; layerId?: string }): JSX
 }
 
 /** 필터 — CPU 로 계산해 잠시 뒤 캔버스에 미리보기 */
-function FiltersHost(): JSX.Element | null {
+function FiltersHost({ focus }: { focus?: string }): JSX.Element | null {
   const doc = useRef(editor.doc).current
   const target = doc ? getLayer(doc, doc.activeId) : null
   const [value, setValue] = useState<Filters>(DEFAULT_FILTERS)
@@ -191,20 +204,21 @@ function FiltersHost(): JSX.Element | null {
   latest.current = value
   useEffect(() => {
     if (!doc || !target) return
-    const t = setTimeout(() => editor.set({ preview: value === DEFAULT_FILTERS ? null : adjustLayer(doc, target.id, null, value) }), 180)
+    const t = setTimeout(() => editor.setPreview(value === DEFAULT_FILTERS ? null : adjustLayer(doc, target.id, null, value)), 180)
     return () => clearTimeout(t)
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => editor.set({ preview: null }), [])
+  useEffect(() => () => editor.setPreview(null), [])
   if (!doc || !target) return null
   return (
     <FiltersDialog
+      initialTab={focus === 'sharpen' || focus === 'other' ? focus : 'blur'}
       value={value}
       onChange={(f) => {
         latest.current = f
         setValue(f)
       }}
       onClose={() => {
-        editor.set({ preview: null })
+        editor.setPreview(null)
         close()
         const v = latest.current
         const d = editor.doc
@@ -293,7 +307,7 @@ function RemoveBgDialog(): JSX.Element {
       title="배경 제거 (AI)"
       onClose={close}
       onEnter={() => void go()}
-      width={480}
+      width={540}
       actions={
         blocked ? (
           <>
@@ -316,13 +330,11 @@ function RemoveBgDialog(): JSX.Element {
         )
       }
     >
-      <Box>
-        활성 레이어에서 피사체를 찾아 나머지를 <b>레이어 마스크</b>로 가립니다. 계산은 이 PC 에서 하고 이미지는 어디에도 올리지 않습니다.
-      </Box>
+      <Lines small={false}>{['활성 레이어에서 피사체를 찾아 나머지를 레이어 마스크로 가립니다.', '계산은 이 PC에서 하며 사진은 어디에도 올리지 않습니다.']}</Lines>
       <GroupBox title="모델">
-        {radio('auto', '자동', '인터넷이 되면 최신, 아니면 내장 모델')}
-        {radio('offline', '내장 (오프라인)', '인스톨러에 포함된 모델 — 인터넷 불필요')}
-        {radio('online', '최신 (온라인)', '개선된 최신 모델을 내려받아 사용 — 인터넷 필요')}
+        {radio('auto', '자동', '인터넷이 되면 최신 모델, 안 되면 내장 모델을 씁니다.')}
+        {radio('offline', '내장 (오프라인)', '설치할 때 함께 들어온 모델입니다. 인터넷이 필요 없습니다.')}
+        {radio('online', '최신 (온라인)', '더 정확한 최신 모델을 내려받아 씁니다. 인터넷이 필요합니다.')}
         {mode !== 'offline' && (
           <Row label="정밀도" labelWidth={60}>
             <Select
@@ -337,14 +349,14 @@ function RemoveBgDialog(): JSX.Element {
           </Row>
         )}
         <Box sx={{ fontSize: font.xs, color: online === false ? color.danger : color.textSecondary }}>
-          {online === null ? '인터넷 연결 확인 중…' : online ? '● 온라인 — 최신 모델을 쓸 수 있습니다.' : '○ 오프라인 — 최신 모델을 쓸 수 없습니다 (내장 모델은 사용 가능).'}
+          {online === null ? '인터넷 연결을 확인하는 중…' : online ? '● 인터넷에 연결되어 있어 최신 모델을 쓸 수 있습니다.' : '○ 인터넷에 연결되어 있지 않습니다. 내장 모델만 쓸 수 있습니다.'}
         </Box>
       </GroupBox>
       {blocked && <Note ok={false}>인터넷에 연결되어 있지 않아 최신(온라인) 모델을 받을 수 없습니다. 내장 모델로 진행하거나, 연결 후 다시 시도하세요.</Note>}
       <SliderRow label="가장자리 다듬기" labelWidth={100} value={m.refine} min={0} max={40} unit="px" onChange={(refine) => setM({ ...m, refine })} />
       <SliderRow label="가장자리 이동" labelWidth={100} value={m.shift} min={-20} max={20} unit="px" onChange={(shift) => setM({ ...m, shift })} />
       <SliderRow label="매트 대비" labelWidth={100} value={m.contrast} min={0} max={100} onChange={(contrast) => setM({ ...m, contrast })} />
-      <Box sx={{ fontSize: font.xs, color: color.textSecondary }}>다듬기 = 머리카락·털 살리기 · 이동(음수) = 테두리 배경색 띠 없애기 · 대비 = 뿌연 반투명 걷기 (Compositor GuidedMatte)</Box>
+      <Lines>{['가장자리 다듬기: 머리카락·털처럼 가는 부분을 살립니다.', '가장자리 이동: 음수로 하면 테두리에 남은 배경색이 줄어듭니다.', '매트 대비: 뿌옇게 비치는 부분을 걷어 냅니다.']}</Lines>
     </ClassicDialog>
   )
 }
@@ -423,7 +435,7 @@ function RecoverDialog({ items }: { items: { id: string; name: string; path: str
         </>
       }
     >
-      <Box>지난번에 프로그램이 저장하지 않은 채 끝났습니다. 자동 저장된 문서를 복구할까요?</Box>
+      <Lines small={false}>{['지난번에 프로그램이 저장하지 않은 채 끝났습니다.', '자동 저장된 문서를 복구할까요?']}</Lines>
       <GroupBox title="자동 저장본">
         {items.map((it) => (
           <Box key={it.id} component="label" sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -445,7 +457,412 @@ function RecoverDialog({ items }: { items: { id: string; name: string; path: str
           </Box>
         ))}
       </GroupBox>
-      <Box sx={{ fontSize: font.xs, color: color.textSecondary }}>"나중에"를 누르면 다음 실행 때 다시 묻습니다.</Box>
+      <Box sx={{ fontSize: font.xs, color: color.textSecondary }}>나중에를 누르면 다음에 실행할 때 다시 묻습니다.</Box>
+    </ClassicDialog>
+  )
+}
+
+/** "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x…) Direct3D11 …)" → "NVIDIA GeForce RTX 3060" */
+function shortGpu(name: string): string {
+  const inner = name.replace(/^ANGLE \(/, '').replace(/\)$/, '')
+  const part = inner.split(', ')[1] ?? inner
+  return (
+    part
+      .replace(/\s*\(0x[0-9A-Fa-f]+\).*$/, '')
+      .replace(/\s+Direct3D.*$/, '')
+      .trim() || name
+  )
+}
+
+/** 이미지 ▸ 조정 ▸ 흑백·색상 균형·활기·포스터화·한계값 — 활성 레이어(선택 영역 한정)에, 잠시 뒤 캔버스 미리보기 */
+function MoreAdjustHost({ which }: { which: MoreAdjustKind }): JSX.Element | null {
+  const doc = useRef(editor.doc).current
+  const target = doc ? getLayer(doc, doc.activeId) : null
+  const [a, setA] = useState<MoreAdjust>({ ...DEFAULT_MORE, kind: which })
+  const [tone, setTone] = useState<'shadows' | 'midtones' | 'highlights'>('midtones')
+  const latest = useRef(a)
+  latest.current = a
+  useEffect(() => {
+    if (!doc || !target) return
+    const t = setTimeout(() => editor.setPreview(editPixels(doc, target.id, 'layer', undefined, (px) => applyMoreAdjust(px, a))), 150)
+    return () => clearTimeout(t)
+  }, [a]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => editor.setPreview(null), [])
+  if (!doc || !target) return null
+  const ok = (): void => {
+    editor.setPreview(null)
+    close()
+    const d = editor.doc
+    if (d)
+      editor.commit(
+        editPixels(d, target.id, 'layer', undefined, (px) => applyMoreAdjust(px, latest.current)),
+        MORE_LABELS[latest.current.kind]
+      )
+  }
+  const bw = (k: keyof typeof a.bw, label: string): JSX.Element => (
+    <SliderRow key={k} label={label} labelWidth={60} value={a.bw[k]} min={-200} max={300} unit="%" onChange={(v) => setA({ ...a, bw: { ...a.bw, [k]: v } })} />
+  )
+  const cbRow = (tone: 'shadows' | 'midtones' | 'highlights', i: 0 | 1 | 2, label: string): JSX.Element => (
+    <SliderRow
+      key={tone + i}
+      label={label}
+      labelWidth={90}
+      value={a.cb[tone][i]}
+      min={-100}
+      max={100}
+      onChange={(v) => {
+        const arr = [...a.cb[tone]] as [number, number, number]
+        arr[i] = v
+        setA({ ...a, cb: { ...a.cb, [tone]: arr } })
+      }}
+    />
+  )
+  return (
+    <ClassicDialog
+      open
+      title={`${MORE_LABELS[a.kind]}${doc.selection ? ' (선택 영역만)' : ''}`}
+      onClose={close}
+      onEnter={ok}
+      width={480}
+      actions={
+        <>
+          <Button variant="outlined" onClick={close}>
+            취소
+          </Button>
+          <Button variant="contained" onClick={ok}>
+            확인
+          </Button>
+        </>
+      }
+    >
+      <ClassicTabs value={a.kind} onChange={(kind) => setA({ ...a, kind })} tabs={(Object.keys(MORE_LABELS) as MoreAdjustKind[]).map((k) => ({ key: k, label: MORE_LABELS[k] }))} />
+      <Box sx={{ minHeight: 250, display: 'flex', flexDirection: 'column', gap: '6px', pt: '8px' }}>
+        {a.kind === 'blackWhite' && (
+          <>
+            {bw('reds', '빨강')}
+            {bw('yellows', '노랑')}
+            {bw('greens', '초록')}
+            {bw('cyans', '청록')}
+            {bw('blues', '파랑')}
+            {bw('magentas', '마젠타')}
+            <Lines>{['색마다 흑백으로 바뀔 때의 밝기를 정합니다.', '하늘을 어둡게 하려면 파랑을 낮추세요.']}</Lines>
+          </>
+        )}
+        {a.kind === 'colorBalance' && (
+          <>
+            <Row label="범위" labelWidth={90}>
+              {(
+                [
+                  ['shadows', '어두운 곳'],
+                  ['midtones', '중간'],
+                  ['highlights', '밝은 곳']
+                ] as const
+              ).map(([k, label]) => (
+                <Box key={k} component="label" sx={{ display: 'flex', alignItems: 'center', gap: '4px', mr: '10px' }}>
+                  <input type="radio" name="cb-tone" checked={tone === k} onChange={() => setTone(k)} style={{ margin: 0, accentColor: color.accent }} />
+                  {label}
+                </Box>
+              ))}
+            </Row>
+            {cbRow(tone, 0, '청록 ↔ 빨강')}
+            {cbRow(tone, 1, '마젠타 ↔ 초록')}
+            {cbRow(tone, 2, '노랑 ↔ 파랑')}
+            <Check label="밝기 유지" checked={a.cb.preserveLuminosity} onChange={(preserveLuminosity) => setA({ ...a, cb: { ...a.cb, preserveLuminosity } })} />
+          </>
+        )}
+        {a.kind === 'vibrance' && (
+          <>
+            <SliderRow label="활기" labelWidth={60} value={a.vibrance} min={-100} max={100} onChange={(vibrance) => setA({ ...a, vibrance })} />
+            <SliderRow label="채도" labelWidth={60} value={a.saturation} min={-100} max={100} onChange={(saturation) => setA({ ...a, saturation })} />
+            <Lines>{['활기는 흐린 색을 더 많이, 이미 선명한 색은 조금만 올립니다.', '인물 사진에서 피부가 과하게 붉어지지 않습니다.']}</Lines>
+          </>
+        )}
+        {a.kind === 'posterize' && <SliderRow label="단계" labelWidth={60} value={a.levels} min={2} max={32} onChange={(levels) => setA({ ...a, levels })} />}
+        {a.kind === 'threshold' && (
+          <>
+            <SliderRow label="경계" labelWidth={60} value={a.threshold} min={1} max={255} onChange={(threshold) => setA({ ...a, threshold })} />
+            <Lines>{['이 밝기보다 밝으면 흰색, 어두우면 검정이 됩니다.']}</Lines>
+          </>
+        )}
+      </Box>
+    </ClassicDialog>
+  )
+}
+
+const MORE_LABELS: Record<MoreAdjustKind, string> = { blackWhite: '흑백', colorBalance: '색상 균형', vibrance: '활기', posterize: '포스터화', threshold: '한계값' }
+
+/**
+ * 선택 ▸ 가장자리 다듬기 (포토샵 Select and Mask 의 핵심만) — 그림의 경계를 길잡이로 선택 테두리를 맞춘다.
+ * 가장자리 감지(가이드 필터)로 머리카락·털을 살리고, 매끄럽게·페더·대비·가장자리 이동으로 다듬는다. 미리보기는 바로.
+ */
+function RefineEdgeDialog(): JSX.Element {
+  const d0 = useRef(editor.doc).current
+  const [o, setO] = useState({ radius: 6, smooth: 0, feather: 0, contrast: 0, shift: 0, dim: true })
+  // 길잡이 = 보이는 그림의 밝기 (한 번만)
+  const guide = useMemo(() => {
+    if (!d0) return null
+    const flat = mergedBitmap(d0)
+    const g = new Float32Array(flat.width * flat.height)
+    for (let i = 0; i < g.length; i++) g[i] = (0.299 * flat.data[i * 4] + 0.587 * flat.data[i * 4 + 1] + 0.114 * flat.data[i * 4 + 2]) / 255
+    return g
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const result = useRef<Selection | null>(null)
+  useEffect(() => {
+    if (!d0?.selection || !guide) return
+    const t = setTimeout(() => {
+      const W = d0.width
+      const H = d0.height
+      let m: Float32Array = Float32Array.from(d0.selection!.mask, (v) => v / 255)
+      m = refineMatte(m, guide, W, H, { refine: o.radius, shift: o.shift, contrast: o.contrast })
+      let sel = makeSelection(
+        W,
+        H,
+        Uint8Array.from(m, (v) => Math.round(Math.min(1, Math.max(0, v)) * 255))
+      )
+      if (sel && o.smooth) sel = smoothSelection(sel, o.smooth)
+      if (sel && o.feather) sel = featherSelection(sel, o.feather)
+      result.current = sel
+      // 미리보기: 선택 테두리 + (켜면) 바깥을 어둡게 — 1×1 검정 레이어를 문서 크기로 늘리고 선택 반전을 마스크로
+      let layers = d0.layers
+      if (o.dim && sel) {
+        const inv = new Uint8ClampedArray(W * H * 4)
+        for (let i = 0; i < W * H; i++) {
+          inv[i * 4] = inv[i * 4 + 1] = inv[i * 4 + 2] = 255 - sel.mask[i]
+          inv[i * 4 + 3] = 255
+        }
+        const tint = makeLayer('pixel', '미리보기', { width: 1, height: 1, data: new Uint8ClampedArray([0, 0, 0, 255]) }, identityTransform(W, H), {
+          opacity: 0.6,
+          mask: { bitmap: { width: W, height: H, data: inv }, enabled: true, linked: true }
+        })
+        layers = [...layers, tint]
+      }
+      editor.setPreview({ ...d0, layers, selection: sel })
+    }, 120)
+    return () => clearTimeout(t)
+  }, [o]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => editor.setPreview(null), [])
+  const go = (): void => {
+    editor.setPreview(null)
+    close()
+    const d = editor.doc
+    if (d && result.current) editor.commit({ ...d, selection: result.current }, '가장자리 다듬기')
+  }
+  const set = (patch: Partial<typeof o>): void => setO({ ...o, ...patch })
+  return (
+    <ClassicDialog
+      open
+      title="가장자리 다듬기"
+      onClose={close}
+      onEnter={go}
+      width={460}
+      actions={
+        <>
+          <Button variant="outlined" onClick={close}>
+            취소
+          </Button>
+          <Button variant="contained" onClick={go}>
+            확인
+          </Button>
+        </>
+      }
+    >
+      <GroupBox title="가장자리 감지">
+        <SliderRow label="반경" labelWidth={90} value={o.radius} min={0} max={40} unit="px" onChange={(radius) => set({ radius })} />
+        <Lines>{['선택 테두리를 그림의 경계에 맞춥니다.', '머리카락·털처럼 가는 부분이 살아납니다.']}</Lines>
+      </GroupBox>
+      <GroupBox title="전체 가장자리">
+        <SliderRow label="매끄럽게" labelWidth={90} value={o.smooth} min={0} max={20} unit="px" onChange={(smooth) => set({ smooth })} />
+        <SliderRow label="페더" labelWidth={90} value={o.feather} min={0} max={30} unit="px" onChange={(feather) => set({ feather })} />
+        <SliderRow label="대비" labelWidth={90} value={o.contrast} min={0} max={100} unit="%" onChange={(contrast) => set({ contrast })} />
+        <SliderRow label="가장자리 이동" labelWidth={90} value={o.shift} min={-20} max={20} unit="px" onChange={(shift) => set({ shift })} />
+      </GroupBox>
+      <Check label="선택 바깥을 어둡게 보기" checked={o.dim} onChange={(dim) => set({ dim })} />
+    </ClassicDialog>
+  )
+}
+
+/** 편집 ▸ 환경 설정 — 실행취소 단계·자동 저장·속도·배경 제거 모델 */
+function PreferencesDialog(): JSX.Element {
+  const s = editor.state.settings
+  const [hist, setHist] = useState(s.historyLimit)
+  const [auto, setAuto] = useState(s.autosaveMinutes)
+  const [fast, setFast] = useState(s.fastInteract)
+  const [bg, setBg] = useState<BgMode>(loadBgMode)
+  const gpu = (() => {
+    try {
+      const gl = document.createElement('canvas').getContext('webgl2')
+      const ext = gl?.getExtension('WEBGL_debug_renderer_info')
+      return gl ? String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) : '없음'
+    } catch {
+      return '알 수 없음'
+    }
+  })()
+  const software = /swiftshader|llvmpipe|basic render/i.test(gpu)
+  const go = (): void => {
+    close()
+    editor.setSettings({ historyLimit: hist, autosaveMinutes: auto, fastInteract: fast })
+    try {
+      localStorage.setItem(BG_MODE_KEY, bg)
+    } catch {
+      /* 무시 */
+    }
+  }
+  return (
+    <ClassicDialog
+      open
+      title="환경 설정"
+      onClose={close}
+      onEnter={go}
+      width={520}
+      actions={
+        <>
+          <Button variant="outlined" onClick={close}>
+            취소
+          </Button>
+          <Button variant="contained" onClick={go}>
+            확인
+          </Button>
+        </>
+      }
+    >
+      <GroupBox title="작업">
+        <SliderRow label="실행 취소 단계" labelWidth={100} value={hist} min={20} max={300} step={10} unit="칸" onChange={setHist} />
+        <Row label="자동 저장" labelWidth={100}>
+          <Select
+            value={auto}
+            onChange={(e) => setAuto(Number(e.target.value))}
+            sx={{ ...selectSx, width: 140 }}
+            SelectDisplayProps={{ 'aria-label': '자동 저장 간격' } as React.HTMLAttributes<HTMLDivElement>}
+          >
+            {[0, 1, 3, 5, 10].map((m) => (
+              <MenuItem key={m} value={m}>
+                {m === 0 ? '끔' : `${m}분마다`}
+              </MenuItem>
+            ))}
+          </Select>
+        </Row>
+        <Lines>{['실행 취소 단계가 많을수록 메모리를 더 씁니다.', '큰 사진을 다룰 때는 줄이세요.', '자동 저장은 프로그램이 갑자기 꺼졌을 때 복구하는 데 쓰입니다.']}</Lines>
+      </GroupBox>
+      <GroupBox title="속도">
+        <Check label="끄거나 칠하는 동안 화면을 낮은 해상도로 그리기 (빠름)" checked={fast} onChange={setFast} />
+        <Box sx={{ fontSize: font.xs, color: software ? color.danger : color.textSecondary }}>
+          {software ? 'GPU 없이 CPU로 화면을 그리고 있어 느릴 수 있습니다. 위 설정을 켜 두세요.' : `그래픽: ${shortGpu(gpu)}`}
+        </Box>
+      </GroupBox>
+      <GroupBox title="배경 제거·피사체 선택">
+        <Row label="기본 모델" labelWidth={100}>
+          <Select
+            value={bg}
+            onChange={(e) => setBg(e.target.value as BgMode)}
+            sx={{ ...selectSx, width: 220 }}
+            SelectDisplayProps={{ 'aria-label': '기본 모델' } as React.HTMLAttributes<HTMLDivElement>}
+          >
+            <MenuItem value="auto">자동 (인터넷이 되면 최신)</MenuItem>
+            <MenuItem value="offline">내장 (오프라인)</MenuItem>
+            <MenuItem value="online">최신 (온라인)</MenuItem>
+          </Select>
+        </Row>
+      </GroupBox>
+    </ClassicDialog>
+  )
+}
+
+/** 편집 ▸ 선 그리기 — 두께·위치·색·불투명도 */
+function StrokeDialog(): JSX.Element {
+  const [w, setW] = useState(4)
+  const [pos, setPos] = useState<'inside' | 'center' | 'outside'>('center')
+  const [hexc, setHex] = useState(() => '#' + editor.state.fg.map((v) => v.toString(16).padStart(2, '0')).join(''))
+  const [op, setOp] = useState(100)
+  const go = (): void => {
+    close()
+    A.strokeSelection({ width: w, position: pos, color: parseHex(hexc), opacity: op / 100 })
+  }
+  return (
+    <ClassicDialog
+      open
+      title="선 그리기"
+      onClose={close}
+      onEnter={go}
+      width={380}
+      actions={
+        <>
+          <Button variant="outlined" onClick={close}>
+            취소
+          </Button>
+          <Button variant="contained" onClick={go}>
+            확인
+          </Button>
+        </>
+      }
+    >
+      <SliderRow label="두께" labelWidth={56} value={w} min={1} max={100} unit="px" onChange={setW} />
+      <SliderRow label="불투명도" labelWidth={56} value={op} min={1} max={100} unit="%" onChange={setOp} />
+      <Row label="색" labelWidth={56}>
+        <PaletteControl title="선 색" value={hexc} onChange={setHex} />
+      </Row>
+      <Row label="위치" labelWidth={56}>
+        {(
+          [
+            ['inside', '안쪽'],
+            ['center', '가운데'],
+            ['outside', '바깥쪽']
+          ] as const
+        ).map(([k, label]) => (
+          <Box key={k} component="label" sx={{ display: 'flex', alignItems: 'center', gap: '4px', mr: '12px' }}>
+            <input type="radio" name="stroke-pos" checked={pos === k} onChange={() => setPos(k)} style={{ margin: 0, accentColor: color.accent }} />
+            {label}
+          </Box>
+        ))}
+      </Row>
+    </ClassicDialog>
+  )
+}
+
+/** 보기 ▸ 안내선 ▸ 새 안내선 — 방향과 위치(px 또는 %) */
+function NewGuideDialog(): JSX.Element {
+  const [axis, setAxis] = useState<'v' | 'h'>('v')
+  const [pos, setPos] = useState('50%')
+  const d = editor.doc
+  const size = d ? (axis === 'v' ? d.width : d.height) : 0
+  const parsed = pos.trim().endsWith('%') ? (parseFloat(pos) / 100) * size : parseFloat(pos)
+  const ok = Number.isFinite(parsed) && parsed >= 0 && parsed <= size
+  const go = (): void => {
+    if (!ok) return
+    close()
+    addGuide(axis, parsed)
+  }
+  return (
+    <ClassicDialog
+      open
+      title="새 안내선"
+      onClose={close}
+      onEnter={go}
+      width={340}
+      actions={
+        <>
+          <Button variant="outlined" onClick={close}>
+            취소
+          </Button>
+          <Button variant="contained" onClick={go} disabled={!ok}>
+            확인
+          </Button>
+        </>
+      }
+    >
+      <Row label="방향" labelWidth={48}>
+        {(['v', 'h'] as const).map((a) => (
+          <Box key={a} component="label" sx={{ display: 'flex', alignItems: 'center', gap: '4px', mr: '12px' }}>
+            <input type="radio" name="guide-axis" checked={axis === a} onChange={() => setAxis(a)} style={{ margin: 0, accentColor: color.accent }} />
+            {a === 'v' ? '세로' : '가로'}
+          </Box>
+        ))}
+      </Row>
+      <Row label="위치" labelWidth={48}>
+        <BarInput value={pos} width={90} ariaLabel="안내선 위치" onChange={setPos} />
+        <Box component="span" sx={{ color: color.textSecondary }}>
+          px 또는 % (0~{size}px)
+        </Box>
+      </Row>
     </ClassicDialog>
   )
 }
@@ -524,7 +941,7 @@ export default function DialogHost(): JSX.Element | null {
       body = <AdjustHost tab={dialog.tab} layerId={dialog.layerId} />
       break
     case 'filters':
-      body = <FiltersHost />
+      body = <FiltersHost focus={dialog.focus} />
       break
     case 'effects':
       body = <EffectsHost layerId={dialog.layerId} />
@@ -543,6 +960,7 @@ export default function DialogHost(): JSX.Element | null {
           onApply={(px) => {
             close()
             if (dialog.op === 'maskFeather') A.featherMask(px)
+            else if (dialog.op === 'smooth') A.smoothSel(px)
             else A.modifySelection(dialog.op, px)
           }}
         />
@@ -585,11 +1003,29 @@ export default function DialogHost(): JSX.Element | null {
       )
       break
     }
+    case 'help':
+      body = <HelpDialog onClose={close} />
+      break
     case 'about':
       body = <AboutDialog onClose={close} />
       break
     case 'removeBg':
       body = <RemoveBgDialog />
+      break
+    case 'newGuide':
+      body = <NewGuideDialog />
+      break
+    case 'stroke':
+      body = <StrokeDialog />
+      break
+    case 'preferences':
+      body = <PreferencesDialog />
+      break
+    case 'refineEdge':
+      body = <RefineEdgeDialog />
+      break
+    case 'moreAdjust':
+      body = <MoreAdjustHost which={dialog.which} />
       break
   }
   if (!body) {

@@ -5,7 +5,9 @@
 import { editor } from '../editor/store'
 import { editPixels, trimToCanvas } from '../editor/pixels'
 import { renderText, DEFAULT_TEXT } from '../editor/text'
-import { cropDoc, getLayer, updateLayer, insertLayer, makeLayer, identityTransform, hitTransform, flattenDoc, type TextData, type Doc } from '@core/index'
+import { cropDoc, getLayer, updateLayer, insertLayer, makeLayer, identityTransform, hitTransform, flattenDoc, type TextData, type Doc, type ShapeData } from '@core/index'
+import { guideSnapTargets } from '../editor/guides'
+import { renderShape, shapePad } from '../editor/shape'
 import type { ToolHandler, ToolCtx, PointerInfo, Pt } from './types'
 
 type R = { x: number; y: number; w: number; h: number }
@@ -51,10 +53,11 @@ function cropRect(doc: Doc, a: Pt, b: Pt, shift: boolean, alt: boolean, tol: num
   let x1 = alt ? a.x + Math.abs(dx) : Math.max(a.x, a.x + dx)
   let y1 = alt ? a.y + Math.abs(dy) : Math.max(a.y, a.y + dy)
   if (!rr) {
-    x0 = snap(x0, [0, doc.width / 2], tol)
-    y0 = snap(y0, [0, doc.height / 2], tol)
-    x1 = snap(x1, [doc.width, doc.width / 2], tol)
-    y1 = snap(y1, [doc.height, doc.height / 2], tol)
+    const gs = guideSnapTargets(doc)
+    x0 = snap(x0, [0, doc.width / 2, ...gs.xs], tol)
+    y0 = snap(y0, [0, doc.height / 2, ...gs.ys], tol)
+    x1 = snap(x1, [doc.width, doc.width / 2, ...gs.xs], tol)
+    y1 = snap(y1, [doc.height, doc.height / 2, ...gs.ys], tol)
   }
   return { x: Math.round(x0), y: Math.round(y0), w: Math.round(x1 - x0), h: Math.round(y1 - y0) }
 }
@@ -90,10 +93,11 @@ export const cropTool: ToolHandler = {
       let y0 = o.y
       let x1 = o.x + o.w
       let y1 = o.y + o.h
-      if (h.includes('w')) x0 = snap(p.p.x, [0], tol)
-      if (h.includes('e')) x1 = snap(p.p.x, [doc.width], tol)
-      if (h.includes('n')) y0 = snap(p.p.y, [0], tol)
-      if (h.includes('s')) y1 = snap(p.p.y, [doc.height], tol)
+      const gs = guideSnapTargets(doc)
+      if (h.includes('w')) x0 = snap(p.p.x, [0, ...gs.xs], tol)
+      if (h.includes('e')) x1 = snap(p.p.x, [doc.width, ...gs.xs], tol)
+      if (h.includes('n')) y0 = snap(p.p.y, [0, ...gs.ys], tol)
+      if (h.includes('s')) y1 = snap(p.p.y, [doc.height, ...gs.ys], tol)
       if (p.alt) {
         // Alt = 가운데 대칭 (Compositor Option 대칭 자르기)
         const cx = o.x + o.w / 2
@@ -258,14 +262,14 @@ export const gradientTool: ToolHandler = {
     if (grad.drag === 'a') grad.a = q
     else grad.b = q
     const doc = c.doc()
-    if (doc && Math.hypot(grad.b.x - grad.a.x, grad.b.y - grad.a.y) > 1) editor.set({ preview: renderGradient(doc, grad.a, grad.b) })
+    if (doc && Math.hypot(grad.b.x - grad.a.x, grad.b.y - grad.a.y) > 1) editor.setPreview(renderGradient(doc, grad.a, grad.b))
     c.redraw()
   },
   up(c) {
     if (grad) grad.drag = null
     if (grad && Math.hypot(grad.b.x - grad.a.x, grad.b.y - grad.a.y) < 1) {
       grad = null
-      editor.set({ preview: null })
+      editor.setPreview(null)
     }
     c.redraw()
   },
@@ -276,12 +280,12 @@ export const gradientTool: ToolHandler = {
       if (d) editor.commit(d, '그라데이션')
     }
     grad = null
-    editor.set({ preview: null })
+    editor.setPreview(null)
     c.redraw()
   },
   cancel(c) {
     grad = null
-    editor.set({ preview: null })
+    editor.setPreview(null)
     c.redraw()
   },
   leave(c) {
@@ -336,56 +340,32 @@ function shapeRect(a: Pt, b: Pt, shift: boolean, alt: boolean, kind: string): R 
   return { x: a.x, y: a.y, w: dx, h: dy }
 }
 
-/** 도형 → 새 레이어 (전경색 채움 + 배경색 외곽선) */
-function makeShape(doc: Doc, r: R, kind: string, shift: boolean): Doc {
+/** 도형 → 새 도형 레이어 (전경색 채움 + 배경색 외곽선, 선은 전경색) — 나중에 다시 고칠 수 있다 */
+function makeShape(doc: Doc, r: R, kind: 'rect' | 'roundRect' | 'ellipse' | 'line', shift: boolean): Doc {
   const s = editor.state.settings
-  const sw = s.shapeStroke || kind === 'line' ? s.shapeStrokeWidth : 0
-  const pad = Math.ceil(sw / 2) + 2
-  let x0 = Math.min(r.x, r.x + r.w)
-  let y0 = Math.min(r.y, r.y + r.h)
-  let w = Math.abs(r.w)
-  let h = Math.abs(r.h)
   if (kind === 'line' && shift) {
     // 45° 단위
     const ang = Math.round(Math.atan2(r.h, r.w) / (Math.PI / 4)) * (Math.PI / 4)
     const d = Math.hypot(r.w, r.h)
     r = { x: r.x, y: r.y, w: Math.cos(ang) * d, h: Math.sin(ang) * d }
-    x0 = Math.min(r.x, r.x + r.w)
-    y0 = Math.min(r.y, r.y + r.h)
-    w = Math.abs(r.w)
-    h = Math.abs(r.h)
   }
-  const cw = Math.max(1, Math.ceil(w + pad * 2))
-  const ch = Math.max(1, Math.ceil(h + pad * 2))
-  const cv = new OffscreenCanvas(cw, ch)
-  const g = cv.getContext('2d')!
-  const fg = `rgb(${editor.state.fg.join(',')})`
-  const bg = `rgb(${editor.state.bg.join(',')})`
-  g.lineWidth = sw
-  g.lineJoin = 'round'
-  g.lineCap = 'round'
-  g.beginPath()
-  if (kind === 'line') {
-    g.moveTo(r.x - x0 + pad, r.y - y0 + pad)
-    g.lineTo(r.x + r.w - x0 + pad, r.y + r.h - y0 + pad)
-    g.strokeStyle = fg
-    g.stroke()
-  } else {
-    if (kind === 'ellipse') g.ellipse(pad + w / 2, pad + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
-    else if (kind === 'roundRect') g.roundRect(pad, pad, w, h, Math.min(s.shapeRadius, w / 2, h / 2))
-    else g.rect(pad, pad, w, h)
-    if (s.shapeFill) {
-      g.fillStyle = fg
-      g.fill()
-    }
-    if (s.shapeStroke) {
-      g.strokeStyle = bg
-      g.stroke()
-    }
+  const x0 = Math.min(r.x, r.x + r.w)
+  const y0 = Math.min(r.y, r.y + r.h)
+  const hex = (c: number[]): string => '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('')
+  const data: ShapeData = {
+    kind,
+    w: Math.abs(r.w),
+    h: Math.abs(r.h),
+    dir: kind === 'line' ? (Math.sign(r.w || 1) === Math.sign(r.h || 1) ? 1 : -1) : undefined,
+    fill: kind === 'line' ? null : s.shapeFill ? hex(editor.state.fg) : null,
+    stroke: kind === 'line' ? hex(editor.state.fg) : s.shapeStroke ? hex(editor.state.bg) : null,
+    strokeWidth: kind === 'line' || s.shapeStroke ? s.shapeStrokeWidth : 0,
+    radius: s.shapeRadius
   }
-  const bmp = { width: cw, height: ch, data: g.getImageData(0, 0, cw, ch).data }
+  const bmp = renderShape(data)
+  const pad = shapePad(data)
   const name = { rect: '사각형', roundRect: '둥근 사각형', ellipse: '타원', line: '선' }[kind] ?? '도형'
-  return insertLayer(doc, makeLayer('pixel', name, bmp, identityTransform(cw, ch, Math.round(x0 - pad), Math.round(y0 - pad))))
+  return insertLayer(doc, makeLayer('pixel', name, bmp, identityTransform(bmp.width, bmp.height, Math.round(x0 - pad), Math.round(y0 - pad)), { shape: data }))
 }
 
 export const shapeTool: ToolHandler = {
@@ -467,9 +447,12 @@ export function startTextDraft(doc: Doc, at: Pt, box?: R): TextDraft {
     bold: s.typeBold,
     italic: s.typeItalic,
     align: s.typeAlign,
+    lineHeight: s.typeLineHeight,
+    tracking: s.typeTracking,
+    vertical: s.typeVertical || undefined,
     color: `#${editor.state.fg.map((v) => v.toString(16).padStart(2, '0')).join('')}`,
-    boxWidth: box?.w ?? Math.max(200, s.typeSize * 8),
-    boxHeight: box?.h ?? s.typeSize * 1.5
+    boxWidth: box?.w ?? (s.typeVertical ? s.typeSize * 1.5 : Math.max(200, s.typeSize * 8)),
+    boxHeight: box?.h ?? (s.typeVertical ? Math.max(200, s.typeSize * 8) : s.typeSize * 1.5)
   }
   return { layerId: null, box: box ?? { x: at.x, y: at.y - s.typeSize, w: data.boxWidth, h: data.boxHeight }, data }
 }

@@ -109,6 +109,8 @@ export interface TextData {
   /** 문단 상자 크기 (문서 px) — 줄바꿈 폭 */
   boxWidth: number
   boxHeight: number
+  /** 세로쓰기 — 줄(세로 단)이 오른쪽에서 왼쪽으로, 글자는 위에서 아래로 */
+  vertical?: boolean
 }
 
 export type LayerKind = 'pixel' | 'group' | 'adjustment' | 'text'
@@ -134,6 +136,29 @@ export interface Layer {
   text: TextData | null
   /** 폴더 접힘 (화면 전용이지만 저장한다) */
   collapsed?: boolean
+  /** 도형 레이어 — 이 값으로 언제든 다시 그린다 (크기를 바꿔도 또렷). 픽셀을 칠하면 사라지고 일반 픽셀 레이어가 된다 */
+  shape?: ShapeData
+  /** 잠금 (포토샵과 같은 세 가지) — alpha: 투명한 곳은 칠해지지 않음, pixels: 칠하기·지우기 금지, position: 이동·변형 금지 */
+  lock?: LayerLock
+}
+
+export interface ShapeData {
+  kind: 'rect' | 'roundRect' | 'ellipse' | 'line'
+  /** 도형 자체 크기 (문서 px, 외곽선 여백 제외) */
+  w: number
+  h: number
+  /** 선: 왼쪽 위→오른쪽 아래(1) 인지 왼쪽 아래→오른쪽 위(−1) 인지 */
+  dir?: 1 | -1
+  fill: string | null
+  stroke: string | null
+  strokeWidth: number
+  radius: number
+}
+
+export interface LayerLock {
+  alpha?: boolean
+  pixels?: boolean
+  position?: boolean
 }
 
 /** 선택 영역 — 문서 크기의 덮임 정도(0~255). null 이면 선택 없음 (Compositor `DocumentSelection`) */
@@ -156,6 +181,13 @@ export interface Doc {
   activeId: string | null
   /** 실행취소 대상이지만 저장하지 않는다 (Compositor 와 같음) */
   selection: Selection | null
+  /** 안내선 — v = 세로선의 x, h = 가로선의 y (문서 px). 저장한다 */
+  guides?: Guides
+}
+
+export interface Guides {
+  v: number[]
+  h: number[]
 }
 
 let seq = 0

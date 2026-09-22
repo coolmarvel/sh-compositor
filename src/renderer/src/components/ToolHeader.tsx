@@ -1,16 +1,29 @@
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Select from '@mui/material/Select'
+import Tooltip from '@mui/material/Tooltip'
 import MenuItem from '@mui/material/MenuItem'
 import FlipRounded from '@mui/icons-material/FlipRounded'
+import AlignHorizontalLeftRounded from '@mui/icons-material/AlignHorizontalLeftRounded'
+import AlignHorizontalCenterRounded from '@mui/icons-material/AlignHorizontalCenterRounded'
+import AlignHorizontalRightRounded from '@mui/icons-material/AlignHorizontalRightRounded'
+import AlignVerticalTopRounded from '@mui/icons-material/AlignVerticalTopRounded'
+import AlignVerticalCenterRounded from '@mui/icons-material/AlignVerticalCenterRounded'
+import AlignVerticalBottomRounded from '@mui/icons-material/AlignVerticalBottomRounded'
+import ViewColumnRounded from '@mui/icons-material/ViewColumnRounded'
+import ViewStreamRounded from '@mui/icons-material/ViewStreamRounded'
+import * as A from '../editor/actions'
 import { editor, useEditor, useDoc } from '../editor/store'
 import { toolInfo } from '../tools'
 import { CROP_RATIO_LIST, hasCrop } from '../tools/misc'
 import { hasPendingDistort } from '../tools/move'
 import { runCommand } from '../editor/commands'
+import { positionLocked } from '../editor/pixels'
 import { selectAll, deselect, invertSelection } from '../editor/actions'
 import { renderText } from '../editor/text'
-import { getLayer, updateLayer, flipLayer, type LayerTransform } from '@core/index'
+import { getLayer, updateLayer, flipLayer, BRUSH_PRESETS, type LayerTransform, type ShapeData } from '@core/index'
+import { reshape } from '../editor/shape'
+import { objectSession, adjustObject } from '../editor/objectSelect'
 import { Group, GDivider, BarInput, SliderControl, ToggleChip, IconBevel, Hint, selectSx } from './bar'
 import { Check } from './dialogs/parts'
 import { ui } from '../theme'
@@ -51,6 +64,7 @@ function MoveHeader(): JSX.Element {
   const t = l?.transform
   const set = (patch: Partial<LayerTransform>): void => {
     if (!doc || !l || !t) return
+    if (positionLocked(l, (m) => editor.toast('info', m))) return
     let next = { ...t, ...patch }
     // 비율 잠금: 폭을 바꾸면 높이도 (가운데 유지)
     if (s.showTransformControls && patch.width !== undefined && patch.height === undefined) next = { ...next, height: (t.height * patch.width) / t.width }
@@ -76,13 +90,26 @@ function MoveHeader(): JSX.Element {
             }
           />
           <Num label="각도" value={t.rotation} unit="°" width={52} onCommit={(rotation) => set({ rotation })} />
-          <IconBevel icon={<FlipRounded />} tooltip="좌우 반전" onClick={() => doc && editor.commit(flipLayer(doc, l.id, true), '좌우 반전')} />
-          <IconBevel icon={<FlipRounded sx={{ transform: 'rotate(90deg)' }} />} tooltip="상하 반전" onClick={() => doc && editor.commit(flipLayer(doc, l.id, false), '상하 반전')} />
+          <IconBevel icon={<FlipRounded />} tooltip="좌우 반전" onClick={() => doc && !positionLocked(l, (m) => editor.toast('info', m)) && editor.commit(flipLayer(doc, l.id, true), '좌우 반전')} />
+          <IconBevel
+            icon={<FlipRounded sx={{ transform: 'rotate(90deg)' }} />}
+            tooltip="상하 반전"
+            onClick={() => doc && !positionLocked(l, (m) => editor.toast('info', m)) && editor.commit(flipLayer(doc, l.id, false), '상하 반전')}
+          />
           <GDivider />
         </>
       ) : (
         <Hint>레이어를 고르면 위치·크기를 숫자로 바꿀 수 있습니다.</Hint>
       )}
+      <IconBevel icon={<AlignHorizontalLeftRounded />} tooltip="왼쪽 맞춤 (선택 영역 › 캔버스 › 고른 레이어들 기준)" onClick={() => A.alignLayers('left')} />
+      <IconBevel icon={<AlignHorizontalCenterRounded />} tooltip="가로 가운데 맞춤" onClick={() => A.alignLayers('hcenter')} />
+      <IconBevel icon={<AlignHorizontalRightRounded />} tooltip="오른쪽 맞춤" onClick={() => A.alignLayers('right')} />
+      <IconBevel icon={<AlignVerticalTopRounded />} tooltip="위쪽 맞춤" onClick={() => A.alignLayers('top')} />
+      <IconBevel icon={<AlignVerticalCenterRounded />} tooltip="세로 가운데 맞춤" onClick={() => A.alignLayers('vcenter')} />
+      <IconBevel icon={<AlignVerticalBottomRounded />} tooltip="아래쪽 맞춤" onClick={() => A.alignLayers('bottom')} />
+      <IconBevel icon={<ViewColumnRounded />} tooltip="가로로 고르게 분포 (3장 이상)" onClick={() => A.distributeLayers('h')} />
+      <IconBevel icon={<ViewStreamRounded />} tooltip="세로로 고르게 분포 (3장 이상)" onClick={() => A.distributeLayers('v')} />
+      <GDivider />
       <Check label="비율 고정" checked={s.showTransformControls} onChange={(v) => editor.setSettings({ showTransformControls: v })} />
       <Check label="자동 선택 (누른 레이어)" checked={s.autoSelect} onChange={(autoSelect) => editor.setSettings({ autoSelect })} />
       {hasPendingDistort() && (
@@ -110,11 +137,30 @@ function Seg<T extends string>({ value, options, onChange }: { value: T; options
   )
 }
 
-function BrushControls({ opacityLabel = '불투명도', strength = false }: { opacityLabel?: string; strength?: boolean }): JSX.Element {
+function BrushControls({ opacityLabel = '불투명도', strength = false, presets = false }: { opacityLabel?: string; strength?: boolean; presets?: boolean }): JSX.Element {
   const s = useEditor((st) => st.settings)
   const b = s.brush
   return (
     <>
+      {presets && (
+        <Select
+          value=""
+          displayEmpty
+          renderValue={() => '사전 설정'}
+          onChange={(e) => {
+            const p = BRUSH_PRESETS[Number(e.target.value)]
+            if (p) editor.setSettings({ brush: { ...b, ...p.brush } })
+          }}
+          sx={{ ...selectSx, width: 104 }}
+          SelectDisplayProps={{ 'aria-label': '브러시 사전 설정' } as React.HTMLAttributes<HTMLDivElement>}
+        >
+          {BRUSH_PRESETS.map((p, i) => (
+            <MenuItem key={p.name} value={i}>
+              {p.name}
+            </MenuItem>
+          ))}
+        </Select>
+      )}
       <SliderControl label="크기" tooltip="[ ] 로 조절" value={b.size} min={1} max={1000} format={(v) => `${Math.round(v)}px`} onChange={(v) => editor.setSettings({ brush: { ...b, size: v } })} />
       <SliderControl
         label="경도"
@@ -137,6 +183,126 @@ function BrushControls({ opacityLabel = '불투명도', strength = false }: { op
           format={(v) => `${v}%`}
           onChange={(v) => editor.setSettings({ brush: { ...b, opacity: v / 100 } })}
         />
+      )}
+      {presets && (
+        <>
+          <GDivider />
+          <Tooltip title="펜 태블릿으로 칠할 때 누르는 힘에 따라 굵기가 바뀝니다.">
+            <span>
+              <Check label="필압 굵기" checked={b.pressureSize !== false} onChange={(v) => editor.setSettings({ brush: { ...b, pressureSize: v } })} />
+            </span>
+          </Tooltip>
+          <Tooltip title="펜 태블릿으로 칠할 때 누르는 힘에 따라 진하기가 바뀝니다.">
+            <span>
+              <Check label="필압 진하기" checked={!!b.pressureOpacity} onChange={(v) => editor.setSettings({ brush: { ...b, pressureOpacity: v } })} />
+            </span>
+          </Tooltip>
+        </>
+      )}
+    </>
+  )
+}
+
+/** 개체 선택 — 감싸는 방식, 방금 잡은 개체의 테두리 확장/축소·부드럽게 (바로 적용) */
+function ObjectSelectHeader(): JSX.Element {
+  const s = useEditor((st) => st.settings)
+  useEditor((st) => st.renderTick)
+  const sess = objectSession()
+  return (
+    <>
+      <Seg
+        value={s.objectMode}
+        options={[
+          { key: 'rect', label: '사각형으로 감싸기' },
+          { key: 'lasso', label: '올가미로 감싸기' },
+          { key: 'paint', label: '칠해서 잡기' }
+        ]}
+        onChange={(objectMode) => editor.setSettings({ objectMode })}
+      />
+      <GDivider />
+      <SliderControl
+        label="테두리"
+        tooltip="방금 잡은 개체의 테두리를 넓히거나(+) 좁힙니다(−)"
+        value={sess?.grow ?? 0}
+        min={-30}
+        max={30}
+        format={(v) => `${v > 0 ? '+' : ''}${v}px`}
+        onChange={(grow) => adjustObject({ grow }, true)}
+      />
+      <SliderControl
+        label="부드럽게"
+        tooltip="방금 잡은 개체의 테두리를 부드럽게 합니다"
+        value={sess?.feather ?? 0}
+        min={0}
+        max={30}
+        format={(v) => `${v}px`}
+        onChange={(feather) => adjustObject({ feather }, true)}
+      />
+      {!sess && s.objectMode !== 'paint' && <Hint>개체를 넉넉히 감싸면 테두리에 맞게 선택됩니다. 처음 한 번은 그림을 분석하느라 몇 초 걸립니다.</Hint>}
+      {sess && s.objectMode !== 'paint' && <Hint>Shift+클릭: 여기도 포함 · Alt+클릭: 여기는 빼기</Hint>}
+      {s.objectMode === 'paint' && <Hint>개체 위를 문지르면 잡히고, 더 문지르면 넓어집니다. Alt+문지르기는 빼기입니다.</Hint>}
+      <SelectionOps />
+    </>
+  )
+}
+
+/** 도형 도구 — 도형 레이어를 골라 두면 그 도형을 바로 고치고(다시 그림), 아니면 새로 그릴 도형의 설정 */
+function ShapeHeader(): JSX.Element {
+  const s = useEditor((st) => st.settings)
+  const doc = useDoc()
+  const l = doc ? getLayer(doc, doc.activeId) : null
+  const sh = l?.shape ?? null
+  const edit = (patch: Partial<ShapeData>): void => {
+    if (doc && l?.shape) editor.commit(reshape(doc, l.id, patch), '도형 고치기')
+  }
+  const colorBox = (value: string, label: string, onChange: (v: string) => void): JSX.Element => (
+    <Box
+      component="input"
+      type="color"
+      value={value}
+      aria-label={label}
+      onChange={(e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
+      sx={{ width: 26, height: size.ctlMd, p: 0, border: `1px solid ${color.borderStrong}` }}
+    />
+  )
+  const kind = sh?.kind ?? s.shapeKind
+  return (
+    <>
+      <Seg
+        value={kind}
+        options={[
+          { key: 'rect', label: '사각형' },
+          { key: 'roundRect', label: '둥근 사각형' },
+          { key: 'ellipse', label: '타원' },
+          { key: 'line', label: '선' }
+        ]}
+        onChange={(k) => (sh ? edit({ kind: k }) : editor.setSettings({ shapeKind: k }))}
+      />
+      {sh ? (
+        <>
+          {sh.kind !== 'line' && (
+            <>
+              <Check label="채우기" checked={!!sh.fill} onChange={(on) => edit({ fill: on ? (sh.fill ?? '#000000') : null })} />
+              {sh.fill && colorBox(sh.fill, '채우기 색', (fill) => edit({ fill }))}
+            </>
+          )}
+          <Check
+            label="외곽선"
+            checked={!!sh.stroke}
+            onChange={(on) => edit({ stroke: on ? (sh.stroke ?? '#000000') : null, strokeWidth: on ? Math.max(1, sh.strokeWidth || s.shapeStrokeWidth) : sh.strokeWidth })}
+          />
+          {sh.stroke && colorBox(sh.stroke, '외곽선 색', (stroke) => edit({ stroke }))}
+          <Num label="두께" value={sh.strokeWidth} unit="px" onCommit={(v) => edit({ strokeWidth: Math.max(0, v) })} width={48} />
+          {sh.kind === 'roundRect' && <Num label="모서리" value={sh.radius} unit="px" onCommit={(v) => edit({ radius: Math.max(0, v) })} width={48} />}
+          <Hint>선택한 도형을 고치는 중입니다.</Hint>
+        </>
+      ) : (
+        <>
+          <Check label="채우기(전경색)" checked={s.shapeFill} onChange={(shapeFill) => editor.setSettings({ shapeFill })} />
+          <Check label="외곽선(배경색)" checked={s.shapeStroke} onChange={(shapeStroke) => editor.setSettings({ shapeStroke })} />
+          <Num label="두께" value={s.shapeStrokeWidth} unit="px" onCommit={(v) => editor.setSettings({ shapeStrokeWidth: Math.max(0, v) })} width={48} />
+          {s.shapeKind === 'roundRect' && <Num label="모서리" value={s.shapeRadius} unit="px" onCommit={(v) => editor.setSettings({ shapeRadius: Math.max(0, v) })} width={48} />}
+        </>
       )}
     </>
   )
@@ -185,10 +351,16 @@ function TypeHeader(): JSX.Element {
         ]}
         onChange={(v) => apply({ typeAlign: v }, { align: v })}
       />
+      <Num label="줄 간격" value={cur?.lineHeight ?? s.typeLineHeight} onCommit={(v) => v > 0 && apply({ typeLineHeight: v }, { lineHeight: v })} width={50} />
+      <Num label="자간" value={cur?.tracking ?? s.typeTracking} onCommit={(v) => apply({ typeTracking: v }, { tracking: v })} width={50} />
+      <ToggleChip
+        label="세로쓰기"
+        tooltip="세로쓰기 (단은 오른쪽에서 왼쪽으로)"
+        on={cur?.vertical ?? s.typeVertical}
+        onClick={() => apply({ typeVertical: !(cur?.vertical ?? s.typeVertical) }, { vertical: !(cur?.vertical ?? s.typeVertical) })}
+      />
       {cur && (
         <>
-          <Num label="줄 간격" value={cur.lineHeight} onCommit={(v) => v > 0 && apply({}, { lineHeight: v })} width={50} />
-          <Num label="자간" value={cur.tracking} onCommit={(v) => apply({}, { tracking: v })} width={50} />
           <Group label="색">
             <Box
               component="input"
@@ -270,6 +442,9 @@ export default function ToolHeader(): JSX.Element {
         </>
       )
       break
+    case 'objectSelect':
+      body = <ObjectSelectHeader />
+      break
     case 'crop':
       body = (
         <>
@@ -309,8 +484,8 @@ export default function ToolHeader(): JSX.Element {
             ]}
             onChange={(brushMode) => editor.setSettings({ brushMode })}
           />
-          <BrushControls />
-          {maskEditing && <Hint>마스크를 칠하는 중 — 검정 = 가림, 흰색 = 보임</Hint>}
+          <BrushControls presets />
+          {maskEditing && <Hint>마스크를 칠하는 중입니다. 검정은 가리고 흰색은 보이게 합니다.</Hint>}
         </>
       )
       break
@@ -371,24 +546,7 @@ export default function ToolHeader(): JSX.Element {
       )
       break
     case 'shape':
-      body = (
-        <>
-          <Seg
-            value={s.shapeKind}
-            options={[
-              { key: 'rect', label: '사각형' },
-              { key: 'roundRect', label: '둥근 사각형' },
-              { key: 'ellipse', label: '타원' },
-              { key: 'line', label: '선' }
-            ]}
-            onChange={(shapeKind) => editor.setSettings({ shapeKind })}
-          />
-          <Check label="채우기(전경색)" checked={s.shapeFill} onChange={(shapeFill) => editor.setSettings({ shapeFill })} />
-          <Check label="외곽선(배경색)" checked={s.shapeStroke} onChange={(shapeStroke) => editor.setSettings({ shapeStroke })} />
-          <Num label="두께" value={s.shapeStrokeWidth} unit="px" onCommit={(v) => editor.setSettings({ shapeStrokeWidth: Math.max(0, v) })} width={48} />
-          {s.shapeKind === 'roundRect' && <Num label="모서리" value={s.shapeRadius} unit="px" onCommit={(v) => editor.setSettings({ shapeRadius: Math.max(0, v) })} width={48} />}
-        </>
-      )
+      body = <ShapeHeader />
       break
     case 'type':
       body = <TypeHeader />
@@ -432,7 +590,7 @@ export default function ToolHeader(): JSX.Element {
         {info?.key === 'brush' && s.brushMode === 'erase' ? '지우개' : (info?.label ?? '도구 없음')}
       </Box>
       <GDivider />
-      {doc ? body : <Hint>파일 → 새로 만들기(Ctrl+N) 또는 열기(Ctrl+O)</Hint>}
+      {doc ? body : <Hint>파일 메뉴에서 새로 만들기(Ctrl+N)나 열기(Ctrl+O)를 고르세요.</Hint>}
     </Box>
   )
 }

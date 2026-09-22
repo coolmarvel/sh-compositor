@@ -1,6 +1,6 @@
 {
   "name": "sh-compositor",
-  "version": "0.1.1",
+  "version": "1.0.4",
   "description": "포토샵형 오프라인 이미지 편집기 — Compositor(MIT, macOS)를 Windows 용으로 옮기고 클래식 업무 UI 로 감싼 것 (가칭)",
   "author": "이성현",
   "license": "UNLICENSED",
@@ -17,7 +17,12 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"test/**/*.{ts,mjs}\" \"scripts/**/*.cjs\" \"*.{ts,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"test/**/*.{ts,mjs}\" \"scripts/**/*.cjs\" \"*.{ts,json}\"",
     "pack:win": "npm run build && electron-builder --win --dir",
-    "dist:win": "npm run build && electron-builder --win"
+    "dist:win": "node scripts/fetch-models.cjs && npm run build && electron-builder --win",
+    "e2e": "env -u WAYLAND_DISPLAY xvfb-run -a -s \"-screen 0 1920x1080x24\" node test/e2e/editor.mjs",
+    "perf": "env -u WAYLAND_DISPLAY xvfb-run -a -s \"-screen 0 1920x1080x24\" node test/e2e/perf.mjs",
+    "audit": "env -u WAYLAND_DISPLAY xvfb-run -a -s \"-screen 0 1920x1080x24\" node test/e2e/audit.mjs",
+    "models": "node scripts/fetch-models.cjs",
+    "build:retouch": "node scripts/build-retouch.cjs"
   },
   "dependencies": {
     "@emotion/react": "^11.13.5",
@@ -27,11 +32,13 @@
     "@imgly/background-removal-online": "npm:@imgly/background-removal@^1.7.0",
     "@mui/icons-material": "^6.1.9",
     "@mui/material": "^6.1.9",
+    "ag-psd": "^31.0.2",
     "fflate": "^0.8.3",
     "heic2any": "^0.0.4",
     "utif2": "^4.1.0"
   },
   "devDependencies": {
+    "@huggingface/transformers": "^4.3.0",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -56,7 +63,8 @@
     },
     "files": [
       "out/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/**/*"
     ],
     "extraResources": [
       {
@@ -66,6 +74,13 @@
       {
         "from": "node_modules/@imgly/background-removal-data/dist",
         "to": "bgrm-data"
+      },
+      {
+        "from": "resources/sam",
+        "to": "sam",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "fileAssociations": [
@@ -92,6 +107,16 @@
       "installerHeaderIcon": "build/icon.ico",
       "license": "build/license.txt",
       "artifactName": "SH-Compositor-Setup-${version}.${ext}"
-    }
+    },
+    "extraFiles": [
+      {
+        "from": "LICENSE",
+        "to": "LICENSE.txt"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
+      }
+    ]
   }
 }

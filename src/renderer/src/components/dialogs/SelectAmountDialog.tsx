@@ -7,8 +7,8 @@ import { ui } from '../../theme'
 
 const { color } = ui
 
-const TITLES = { expand: '선택 영역 확장', contract: '선택 영역 축소', feather: '선택 영역 페더', maskFeather: '마스크 페더' } as const
-const memory: Record<keyof typeof TITLES, number> = { expand: 4, contract: 4, feather: 8, maskFeather: 8 }
+const TITLES = { expand: '선택 영역 확장', contract: '선택 영역 축소', feather: '선택 영역 페더', maskFeather: '마스크 페더', smooth: '선택 영역 매끄럽게' } as const
+const memory: Record<keyof typeof TITLES, number> = { expand: 4, contract: 4, feather: 8, maskFeather: 8, smooth: 4 }
 
 /** 선택 ▸ 수정 ▸ 확장/축소/페더 — Compositor `SelectionAmountSheet` */
 export default function SelectAmountDialog({ op, onClose, onApply }: { op: keyof typeof TITLES; onClose: () => void; onApply: (px: number) => void }): JSX.Element {
@@ -38,7 +38,7 @@ export default function SelectAmountDialog({ op, onClose, onApply }: { op: keyof
         </>
       }
     >
-      <Row label={op === 'feather' || op === 'maskFeather' ? '페더 반경' : op === 'expand' ? '확장' : '축소'}>
+      <Row label={op === 'smooth' ? '반경' : op === 'feather' || op === 'maskFeather' ? '페더 반경' : op === 'expand' ? '확장' : '축소'}>
         <BarInput type="number" width={80} value={v} ariaLabel="픽셀" onChange={setV} />
         <Box component="span" sx={{ color: color.textSecondary }}>
           픽셀 (1~500)

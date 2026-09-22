@@ -25,3 +25,6 @@ out/
 release/
 dist/
 *.tsbuildinfo
+
+# 개체 선택 AI 모델 (scripts/fetch-models.cjs 로 내려받음)
+resources/sam/

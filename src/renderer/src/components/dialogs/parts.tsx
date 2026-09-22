@@ -149,6 +149,17 @@ export function SliderRow({
   )
 }
 
+/** 설명 문장들 — 한 문장에 한 줄 (문장 중간에서 줄이 바뀌지 않게 대화상자 폭을 맞춘다) */
+export function Lines({ children, small = true }: { children: string[]; small?: boolean }): JSX.Element {
+  return (
+    <Box sx={{ fontSize: small ? font.xs : font.md, color: small ? color.textSecondary : color.text, lineHeight: 1.6 }}>
+      {children.map((t) => (
+        <Box key={t}>{t}</Box>
+      ))}
+    </Box>
+  )
+}
+
 /** 안내/결과 문장 (ok=false 면 경고 색) */
 export function Note({ ok = true, children }: { ok?: boolean; children: React.ReactNode }): JSX.Element {
   return (

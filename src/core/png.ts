@@ -4,6 +4,7 @@
  * 디코딩: 8비트 그레이·RGB·팔레트·그레이+알파·RGBA, 필터 0~4, 인터레이스 없음 (Compositor·브라우저가 쓰는 형식).
  */
 import { zlibSync, unzlibSync } from 'fflate'
+import { checkLimits } from './limits'
 
 const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 
@@ -127,9 +128,11 @@ export function decodePng(bytes: Uint8Array): { width: number; height: number; d
   const idat: Uint8Array[] = []
   while (p + 8 <= bytes.length) {
     const len = dv.getUint32(p)
+    if (p + 12 + len > bytes.length) throw new Error('PNG 청크가 잘렸습니다.')
     const type = String.fromCharCode(bytes[p + 4], bytes[p + 5], bytes[p + 6], bytes[p + 7])
     const data = bytes.subarray(p + 8, p + 8 + len)
     if (type === 'IHDR') {
+      if (len !== 13) throw new Error('PNG 헤더 크기가 잘못되었습니다.')
       width = dv.getUint32(p + 8)
       height = dv.getUint32(p + 12)
       depth = data[8]
@@ -142,6 +145,9 @@ export function decodePng(bytes: Uint8Array): { width: number; height: number; d
     else if (type === 'IEND') break
     p += 12 + len
   }
+  const limit = checkLimits(width, height)
+  if (limit) throw new Error(limit)
+  if (![0, 2, 3, 4, 6].includes(ctype) || (ctype === 3 && !palette)) throw new Error('PNG 색상 형식이 잘못되었습니다.')
   if (depth !== 8 || interlace) throw new Error('8비트·비인터레이스 PNG 만 읽습니다.')
   const channels = ctype === 6 ? 4 : ctype === 2 ? 3 : ctype === 4 ? 2 : 1
   let total = 0
@@ -154,12 +160,14 @@ export function decodePng(bytes: Uint8Array): { width: number; height: number; d
   }
   const raw = unzlibSync(joined)
   const stride = width * channels
+  if (raw.length !== height * (stride + 1)) throw new Error('PNG 픽셀 데이터 크기가 다릅니다.')
   const cur = new Uint8Array(stride)
   const prev = new Uint8Array(stride)
   const out = new Uint8ClampedArray(width * height * 4)
   for (let y = 0; y < height; y++) {
     const o = y * (stride + 1)
     const f = raw[o]
+    if (f > 4) throw new Error('PNG 필터가 잘못되었습니다.')
     for (let i = 0; i < stride; i++) {
       const x = raw[o + 1 + i]
       const a = i >= channels ? cur[i - channels] : 0

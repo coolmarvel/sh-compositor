@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import { LayerEffects, DEFAULT_EFFECTS, hasEffects, ShadowEffect } from '@core/index'
+import { LayerEffects, DEFAULT_EFFECTS, DEFAULT_GLOW, hasEffects, ShadowEffect } from '@core/index'
 import { PaletteControl } from '../bar'
 import { ClassicDialog, GroupBox, Row, Check, SliderRow } from './parts'
 import { ClassicTabs } from './tabs'
@@ -9,7 +9,7 @@ import { ui } from '../../theme'
 
 const { color, font } = ui
 
-type Tab = 'stroke' | 'shadow' | 'overlay' | 'inner'
+type Tab = 'stroke' | 'shadow' | 'glow' | 'overlay' | 'inner'
 
 /**
  * 효과 대화상자 — Compositor `EffectsSheet`(외곽선·그림자·색 덮기·안쪽 그림자).
@@ -62,9 +62,10 @@ export default function EffectsDialog({ value, onChange, onClose }: { value: Lay
         </>
       }
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <Button
           variant="outlined"
+          sx={{ whiteSpace: 'nowrap', flexShrink: 0, px: '12px' }}
           onClick={() =>
             onChange({
               ...DEFAULT_EFFECTS,
@@ -75,7 +76,7 @@ export default function EffectsDialog({ value, onChange, onClose }: { value: Lay
         >
           스티커 프리셋
         </Button>
-        <Box sx={{ fontSize: font.xs, color: color.textSecondary }}>흰 외곽선 10px + 옅은 그림자 — 배경 제거한 레이어의 모양을 따라갑니다.</Box>
+        <Box sx={{ fontSize: font.xs, color: color.textSecondary }}>흰 외곽선과 옅은 그림자로 스티커처럼 만듭니다.</Box>
       </Box>
       <ClassicTabs
         value={tab}
@@ -83,6 +84,7 @@ export default function EffectsDialog({ value, onChange, onClose }: { value: Lay
         tabs={[
           { key: 'stroke', label: '외곽선' },
           { key: 'shadow', label: '그림자' },
+          { key: 'glow', label: '외부 광선' },
           { key: 'overlay', label: '색 덮기' },
           { key: 'inner', label: '안쪽 그림자' }
         ]}
@@ -100,9 +102,41 @@ export default function EffectsDialog({ value, onChange, onClose }: { value: Lay
           </GroupBox>
         )}
         {tab === 'shadow' && shadowRows('shadow', e.shadow)}
+        {tab === 'glow' && (
+          <GroupBox title="외부 광선">
+            <Check label="사용" checked={!!e.outerGlow?.enabled} onChange={(enabled) => onChange({ ...e, outerGlow: { ...(e.outerGlow ?? DEFAULT_GLOW), enabled } })} />
+            <SliderRow
+              label="크기"
+              value={(e.outerGlow ?? DEFAULT_GLOW).size}
+              min={1}
+              max={150}
+              unit="px"
+              onChange={(size) => onChange({ ...e, outerGlow: { ...(e.outerGlow ?? DEFAULT_GLOW), size } })}
+            />
+            <SliderRow
+              label="퍼짐"
+              value={(e.outerGlow ?? DEFAULT_GLOW).spread}
+              min={0}
+              max={100}
+              unit="%"
+              onChange={(spread) => onChange({ ...e, outerGlow: { ...(e.outerGlow ?? DEFAULT_GLOW), spread } })}
+            />
+            <SliderRow
+              label="불투명도"
+              value={Math.round((e.outerGlow ?? DEFAULT_GLOW).opacity * 100)}
+              min={0}
+              max={100}
+              unit="%"
+              onChange={(v) => onChange({ ...e, outerGlow: { ...(e.outerGlow ?? DEFAULT_GLOW), opacity: v / 100 } })}
+            />
+            <Row label="색">
+              <PaletteControl title="광선 색" value={(e.outerGlow ?? DEFAULT_GLOW).color} onChange={(c) => onChange({ ...e, outerGlow: { ...(e.outerGlow ?? DEFAULT_GLOW), color: c } })} />
+            </Row>
+          </GroupBox>
+        )}
         {tab === 'overlay' && (
           <GroupBox title="색 덮기">
-            <Check label="사용 — 모양 전체를 한 색으로 (로고 단색화)" checked={e.overlay.enabled} onChange={(enabled) => onChange({ ...e, overlay: { ...e.overlay, enabled } })} />
+            <Check label="사용 (모양 전체를 한 색으로 덮기)" checked={e.overlay.enabled} onChange={(enabled) => onChange({ ...e, overlay: { ...e.overlay, enabled } })} />
             <SliderRow label="불투명도" value={Math.round(e.overlay.opacity * 100)} min={0} max={100} unit="%" onChange={(v) => onChange({ ...e, overlay: { ...e.overlay, opacity: v / 100 } })} />
             <Row label="색">
               <PaletteControl title="덮을 색" value={e.overlay.color} onChange={(c) => onChange({ ...e, overlay: { ...e.overlay, color: c } })} />

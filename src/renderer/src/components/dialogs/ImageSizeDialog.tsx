@@ -5,10 +5,10 @@ import Select from '@mui/material/Select'
 import MenuItem from '@mui/material/MenuItem'
 import { SIZE_UNITS, SizeUnit, ImageSizeState, initialState, toDisplay, roundDisplay, setDimension, setDpi, setResample, validate, resultPixels, DEFAULT_DPI } from '@core/index'
 import { BarInput, selectSx } from '../bar'
-import { ClassicDialog, GroupBox, Row, Check, Note } from './parts'
+import { ClassicDialog, GroupBox, Row, Check, Note, Lines } from './parts'
 import { ui } from '../../theme'
 
-const { color, font } = ui
+const { color } = ui
 
 export interface ImageSizeResult {
   /** 출력 픽셀 (null = 원본 유지 — 리샘플 끔) */
@@ -148,11 +148,11 @@ export default function ImageSizeDialog({
             setSt(setResample(st, on, src))
           }}
         />
-        <Box sx={{ fontSize: font.xs, color: color.textSecondary }}>
+        <Lines>
           {st.resample
-            ? '모든 레이어를 비율대로 늘이거나 줄입니다 (비파괴 — 레이어 원본 픽셀은 보존, 크게 줄일 때 2배씩 단계 축소로 선명하게).'
-            : '인쇄 크기와 해상도만 바뀌고 픽셀은 그대로입니다. 내보내는 PNG·JPEG 의 DPI 에 반영됩니다.'}
-        </Box>
+            ? ['모든 레이어를 비율에 맞춰 늘이거나 줄입니다.', '원본 픽셀은 그대로 두므로 다시 키워도 화질이 떨어지지 않습니다.']
+            : ['인쇄 크기와 해상도만 바뀌고 픽셀은 그대로입니다.', '내보내는 PNG·JPEG의 DPI에 반영됩니다.']}
+        </Lines>
       </GroupBox>
 
       <Note ok={v.ok}>{v.message}</Note>

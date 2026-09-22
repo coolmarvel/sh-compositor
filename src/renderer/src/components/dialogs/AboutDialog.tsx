@@ -1,6 +1,6 @@
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import { ClassicDialog, GroupBox } from './parts'
+import { ClassicDialog, GroupBox, Lines } from './parts'
 import { ui } from '../../theme'
 import appIconUrl from '../../assets/app-icon.png'
 import signUrl from '../../assets/sign.png'
@@ -8,6 +8,16 @@ import signUrl from '../../assets/sign.png'
 const { color, space, font } = ui
 
 declare const __APP_VERSION__: string
+
+/** 오픈소스 고지 — 한 줄에 하나씩 (이름 · 라이선스 · 쓰임) */
+const NOTICES: [string, string, string][] = [
+  ['Compositor', 'MIT', '원본 편집기 (© 2026 Wonder Assembly LLC)'],
+  ['@imgly/background-removal', 'AGPL-3.0', 'AI 배경 제거'],
+  ['React · MUI', 'MIT', '화면'],
+  ['fflate', 'MIT', '프로젝트 파일 압축'],
+  ['ag-psd', 'MIT', 'PSD 열기·저장'],
+  ['SlimSAM · transformers.js', 'Apache-2.0', 'AI 개체 선택']
+]
 
 /** 도움말 → 정보. 제작 크레딧 + 오픈소스 고지 (Compositor MIT 조건: 저작권 표시 유지) */
 export default function AboutDialog({ onClose }: { onClose: () => void }): JSX.Element {
@@ -18,7 +28,7 @@ export default function AboutDialog({ onClose }: { onClose: () => void }): JSX.E
       title="SH Compositor 정보"
       onClose={onClose}
       onEnter={onClose}
-      width={480}
+      width={540}
       actions={
         <Button variant="contained" onClick={onClose}>
           확인
@@ -37,13 +47,29 @@ export default function AboutDialog({ onClose }: { onClose: () => void }): JSX.E
         </Box>
       </Box>
       <GroupBox title="오픈소스 고지">
-        <Box className="selectable" sx={{ fontSize: font.xs, color: color.textSecondary, lineHeight: 1.6 }}>
-          화면 구성·도구·레이어 모델·프로젝트 형식(.comp v7 호환)·보정·필터·효과·내용 인식 채우기·마법봉의 설계와 수식은
-          <b> Compositor</b> (Copyright © 2026 Wonder Assembly LLC, MIT License) 를 TypeScript·WebGL2 로 옮긴 것입니다.
-          <br />
-          Permission is hereby granted, free of charge, to any person obtaining a copy of this software… (전문은 설치 폴더의 LICENSE 참조)
-          <br />
-          AI 배경 제거: @imgly/background-removal (AGPL-3.0) · 압축: fflate (MIT) · UI: React, MUI (MIT)
+        <Lines>{['macOS용 무료 편집기 Compositor를 Windows용으로 옮겨 만들었습니다.', '라이선스 전문은 설치 폴더의 LICENSE.txt와 THIRD_PARTY_NOTICES.md에 있습니다.']}</Lines>
+        <Box
+          component="table"
+          className="selectable"
+          sx={{
+            borderCollapse: 'collapse',
+            width: '100%',
+            fontSize: font.xs,
+            '& td': { py: '2px', pr: '10px', verticalAlign: 'top', whiteSpace: 'nowrap' },
+            '& td:last-of-type': { whiteSpace: 'normal', pr: 0 }
+          }}
+        >
+          <tbody>
+            {NOTICES.map(([name, lic, use]) => (
+              <tr key={name}>
+                <td>
+                  <b>{name}</b>
+                </td>
+                <td>{lic}</td>
+                <td>{use}</td>
+              </tr>
+            ))}
+          </tbody>
         </Box>
       </GroupBox>
     </ClassicDialog>

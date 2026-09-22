@@ -22,6 +22,9 @@ import {
   type LayerTransform,
   type Quad
 } from '@core/index'
+import { guideSnapTargets } from '../editor/guides'
+import { positionLocked } from '../editor/pixels'
+import { reshapeToTransform } from '../editor/shape'
 import type { ToolHandler, ToolCtx, PointerInfo, Pt } from './types'
 
 type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rot'
@@ -87,8 +90,9 @@ function hitHandle(c: ToolCtx, t: LayerTransform, s: Pt): Handle | null {
 
 /** 스냅 후보: 캔버스 가장자리·가운데 + 다른 보이는 레이어의 가장자리·가운데 */
 function snapTargets(doc: Doc, exclude: Set<string>): { xs: number[]; ys: number[] } {
-  const xs = [0, doc.width / 2, doc.width]
-  const ys = [0, doc.height / 2, doc.height]
+  const gs = guideSnapTargets(doc)
+  const xs = [0, doc.width / 2, doc.width, ...gs.xs]
+  const ys = [0, doc.height / 2, doc.height, ...gs.ys]
   for (const l of doc.layers) {
     if (exclude.has(l.id) || !l.visible || !l.bitmap) continue
     const cs = transformCorners(l.transform)
@@ -230,6 +234,7 @@ export const moveTool: ToolHandler = {
       if (p.ctrl && !editor.state.settings.autoSelect && !l) return
     }
     if (!l) return
+    if (positionLocked(l, (m) => editor.toast('info', m))) return
     if (distort && distort.layerId === l.id) {
       const k = distort.quad.findIndex((q) => {
         const s = c.toScreen(q.x, q.y)
@@ -281,7 +286,12 @@ export const moveTool: ToolHandler = {
       let d = doc
       for (const id of drag.ids) {
         const o = drag.origs.get(id)!
-        d = updateLayer(d, id, { transform: { ...o, x: Math.round((o.x + dx + snap.dx) * 100) / 100, y: Math.round((o.y + dy + snap.dy) * 100) / 100 } })
+        // 크기·각도가 그대로인 레이어는 정수 픽셀로만 옮긴다 (포토샵과 같음) — 반 픽셀 위치는 칠할 때 다시 샘플링돼 흐려지고 느리다
+        const k = getLayer(d, id)
+        const whole = !!k?.bitmap && o.rotation % 360 === 0 && Math.abs(o.width - k.bitmap.width) < 1e-6 && Math.abs(o.height - k.bitmap.height) < 1e-6
+        const nx = o.x + dx + snap.dx
+        const ny = o.y + dy + snap.dy
+        d = updateLayer(d, id, { transform: { ...o, x: whole ? Math.round(nx) : Math.round(nx * 100) / 100, y: whole ? Math.round(ny) : Math.round(ny * 100) / 100 } })
       }
       editor.commitGesture(d, '이동')
     } else if (drag.kind === 'scale') {
@@ -303,6 +313,12 @@ export const moveTool: ToolHandler = {
     const was = drag
     drag = null
     guides = { xs: [], ys: [] }
+    // 도형 레이어를 늘였으면 새 크기로 다시 그려 또렷하게 (같은 실행취소 칸)
+    if (was?.kind === 'scale') {
+      const d = editor.doc
+      const l = d && getLayer(d, d.activeId)
+      if (d && l?.shape) editor.commitGesture(reshapeToTransform(d, l), '변형')
+    }
     if (was && was.kind !== 'distort') editor.endGesture()
     c.redraw()
   },
@@ -329,6 +345,7 @@ export const moveTool: ToolHandler = {
     const dir = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key]
     if (!dir) return false
     const l = getLayer(doc, doc.activeId)
+    if (positionLocked(l, (m) => editor.toast('info', m))) return true
     if (!l) return false
     let d = doc
     for (const k of movable(doc, l)) d = updateLayer(d, k.id, { transform: { ...k.transform, x: k.transform.x + dir[0], y: k.transform.y + dir[1] } })

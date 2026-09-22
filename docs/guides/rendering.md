@@ -1,7 +1,7 @@
 ---
 title: 렌더링 — CPU 합성(진실)과 WebGL2 거울
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-22
 domain: rendering
 ---
 
@@ -31,7 +31,26 @@ domain: rendering
   (선택 영역 = 그 마스크)를 끼워 GPU 로 미리 보고, 확인하면 CPU `adjustLayer` 로 굽는다 (`components/DialogHost.tsx`).
   필터는 GPU 경로가 없어 180ms 디바운스 CPU 미리보기.
 
+## 빠르게 그리기 (v1.0.0 — `npm run perf` 로 측정)
+
+| 장치 | 코드 | 효과 |
+|---|---|---|
+| 제자리 합성 | `drawLayerInto` — 표준 혼합은 하드웨어 블렌딩(ONE, ONE_MINUS_SRC_ALPHA), 특수 혼합은 레이어 영역만 예비 FBO 로 복사 | 레이어마다 화면 전체 복사 제거 |
+| 클리핑 기준 버퍼 | `needsBase` — 바로 위가 클리핑일 때만 | 레이어당 전체 처리 2번 제거 |
+| 아래 레이어 캐시 | `prefixKey`·`snapshotPrefix` — 활성 레이어 아래(최상위 기준)까지 떠 둠 | 끌기·칠하기에서 아래는 복원만 |
+| 영역 합성 | `dirtyRegion` — 직전 합성 문서와 레이어별 비교(+`uploads`) → scissor. 선택만 바뀌면 `'none'` | 작은 변화는 작은 비용 |
+| 같은 내용 | `sameLayer`·`sameAs`(칠하기 시작 때 GPU 복제한 사본) — 칠해지면 합성 뒤 지움 | 붓질 시작·확정에 전체 재합성 없음 |
+| 끄는 중 | `gesture`(밉맵 생략) · `interactive`(이동 도구만 화면 배율 해상도) · 소프트웨어 렌더링이면 캔버스 ½ | 손 뗄 때 한 번만 고화질 |
+| 텍스처 보존 | `collect` 한 세대 더 | 실행취소 때 재업로드 없음 |
+| 화면 버퍼 | `preserveDrawingBuffer:false` + 그리기 밖 GPU 작업 뒤 `repaint()` | 매 프레임 화면 읽어 가기 제거 |
+| 필터 조정 레이어 | 셰이더 경로 없음 → 그 문서는 CPU `flattenDoc` 을 통째로 올림 (.comp·PSD 에서만) | 정확 |
+
 ## 검증
+
+v1.0.4 CPU 경로는 원래 크기·정수 이동의 래스터를 보간 대신 행 복사로 만들고,
+픽셀 합성 결과 배열을 재사용한다. 클리핑 기준 덮임은 바로 위에 클리핑 레이어가 있을 때만 생성한다.
+`test/review-core.test.ts`가 기존 구현과 마스크·폴더·혼합·변형·제외 레이어 결과를 비교한다.
+GLRenderer 종료 시 합성/임시/prefix 타깃과 프로그램·정점 버퍼·VAO·LUT 텍스처를 함께 해제한다.
 
 E2E `A6`·`C2`·`C9` 가 화면 픽셀(스크린샷)과 CPU 합성을 비교한다 (`test/e2e/editor.mjs screenPx`).
 

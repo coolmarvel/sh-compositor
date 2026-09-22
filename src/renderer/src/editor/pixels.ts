@@ -99,6 +99,22 @@ export function bakeLayer(doc: Doc, id: string, cover?: Rect): Doc {
   return updateLayer(doc, id, { bitmap: place(l.bitmap), mask, transform: identityTransform(want.w, want.h, want.x, want.y) })
 }
 
+/** 잠금 안내 — 막혔으면 true (알림을 띄운다) */
+export function pixelsLocked(l: Layer | null | undefined, notify: (m: string) => void): boolean {
+  if (l?.lock?.pixels) {
+    notify(`"${l.name}" 레이어는 픽셀이 잠겨 있습니다. 레이어 패널의 자물쇠를 풀고 다시 하세요.`)
+    return true
+  }
+  return false
+}
+export function positionLocked(l: Layer | null | undefined, notify: (m: string) => void): boolean {
+  if (l?.lock?.position) {
+    notify(`"${l.name}" 레이어는 위치가 잠겨 있습니다. 레이어 패널의 자물쇠를 풀고 다시 하세요.`)
+    return true
+  }
+  return false
+}
+
 /** 문서 (x,y) 의 선택 덮임 0~1 (선택이 없으면 1) */
 export function selWeight(doc: Doc, x: number, y: number): number {
   const s = doc.selection
@@ -122,6 +138,8 @@ export function editPixels(doc: Doc, id: string, target: 'layer' | 'mask', cover
   const orig = bmp.data
   const data = orig.slice()
   fn(data, bmp.width, bmp.height, ox, oy)
+  // 투명 픽셀 잠금: 알파는 원래대로 (색만 바뀐다 — 포토샵 Lock transparent pixels)
+  if (target === 'layer' && l.lock?.alpha) for (let i = 3; i < data.length; i += 4) data[i] = orig[i]
   if (d.selection) {
     for (let y = 0; y < bmp.height; y++)
       for (let x = 0; x < bmp.width; x++) {
@@ -132,7 +150,8 @@ export function editPixels(doc: Doc, id: string, target: 'layer' | 'mask', cover
       }
   }
   const next: Bitmap = { width: bmp.width, height: bmp.height, data }
-  d = updateLayer(d, id, target === 'mask' ? { mask: { ...l.mask!, bitmap: next } } : { bitmap: next })
+  // 픽셀을 고치면 도형 레이어는 일반 픽셀 레이어가 된다 (모양 데이터와 픽셀이 달라지므로)
+  d = updateLayer(d, id, target === 'mask' ? { mask: { ...l.mask!, bitmap: next } } : { bitmap: next, shape: undefined })
   return d
 }
 

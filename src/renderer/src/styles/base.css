@@ -14,12 +14,17 @@ body,
 #root {
   margin: 0;
   height: 100%;
+  /* 설치형 앱: 페이지 자체는 절대 스크롤되지 않는다 (포커스·끌기로 화면이 밀리던 사고 방지) */
+  overflow: hidden;
 }
 
 body {
   font-family: var(--font-sans);
   font-size: var(--font-md);
   line-height: 1.45;
+  /* 한국어는 낱말(띄어쓰기) 단위로만 줄을 바꾼다 — 낱말 중간에서 끊기지 않게 */
+  word-break: keep-all;
+  overflow-wrap: break-word;
   color: var(--c-text);
   background: var(--c-canvas);
   /* 설치형 앱답게: 크롬은 텍스트 선택·손 커서 없음 */

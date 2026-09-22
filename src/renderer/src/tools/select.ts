@@ -6,6 +6,7 @@
  *  - 다각형 올가미: 클릭으로 꼭짓점, 시작점 클릭·더블클릭·Enter 로 닫기, Backspace = 마지막 점 삭제, Esc 취소.
  *  - 마법봉: 허용 오차·인접·모든 레이어 표본.
  */
+import { guideSnapTargets } from '../editor/guides'
 import { editor } from '../editor/store'
 import {
   rectMask,
@@ -141,7 +142,7 @@ function marqueeOrLasso(kind: 'marquee' | 'lasso'): ToolHandler {
       drag = null
       if (!doc || !d) return
       if (d.kind === 'draw') {
-        const r = rectOf(d.start, p.p, p.shift, p.alt)
+        const r = snapToGuides(rectOf(d.start, p.p, p.shift, p.alt), doc, 6 / c.view().zoom)
         if (r.w < 1 || r.h < 1) {
           if (d.mode === 'replace' && doc.selection) editor.commit({ ...doc, selection: null }, '선택 해제')
         } else {
@@ -191,7 +192,9 @@ function marqueeOrLasso(kind: 'marquee' | 'lasso'): ToolHandler {
     },
     overlay(c, g) {
       if (drag?.kind === 'draw') {
-        const r = rectOf(drag.start, drag.cur, false, false)
+        const d0 = c.doc()
+        const r0 = rectOf(drag.start, drag.cur, false, false)
+        const r = d0 ? snapToGuides(r0, d0, 6 / c.view().zoom) : r0
         const a = c.toScreen(r.x, r.y)
         const b = c.toScreen(r.x + r.w, r.y + r.h)
         antsStroke(g, () => {
@@ -239,6 +242,18 @@ function rectOf(a: Pt, b: Pt, square: boolean, center: boolean): { x: number; y:
   if (center) return { x: a.x - Math.abs(dx), y: a.y - Math.abs(dy), w: Math.abs(dx) * 2, h: Math.abs(dy) * 2 }
   return { x: Math.min(a.x, a.x + dx), y: Math.min(a.y, a.y + dy), w: Math.abs(dx), h: Math.abs(dy) }
 }
+/** 사각 선택 가장자리를 안내선에 붙인다 (보기 ▸ 안내선에 맞추기) */
+function snapToGuides(r: { x: number; y: number; w: number; h: number }, doc: Doc, tol: number): { x: number; y: number; w: number; h: number } {
+  const g = guideSnapTargets(doc)
+  if (!g.xs.length && !g.ys.length) return r
+  const near = (v: number, ts: number[]): number => ts.find((t) => Math.abs(t - v) < tol) ?? v
+  const x0 = near(r.x, g.xs)
+  const y0 = near(r.y, g.ys)
+  const x1 = near(r.x + r.w, g.xs)
+  const y1 = near(r.y + r.h, g.ys)
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+}
+
 /** 사각 선택은 픽셀 격자에 맞춘다 (Photoshop 과 같이 반쪽 픽셀 없음) */
 const snapRect = (r: { x: number; y: number; w: number; h: number }): { x: number; y: number; w: number; h: number } => {
   const x0 = Math.round(r.x)

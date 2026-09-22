@@ -35,8 +35,38 @@ export function wrapLines(ctx: OffscreenCanvasRenderingContext2D, text: string, 
   return out
 }
 
+/** 세로쓰기: 상자 높이로 단을 나눈다 (글자 단위) */
+function renderVertical(t: TextData): Bitmap {
+  const colW = t.size * t.lineHeight
+  const step = t.size * (1 + t.tracking / 1000)
+  const maxH = Math.max(t.size, t.boxHeight)
+  const perCol = Math.max(1, Math.floor(maxH / step))
+  const cols: string[][] = []
+  for (const para of t.text.split('\n')) {
+    const chars = Array.from(para)
+    if (!chars.length) cols.push([])
+    for (let i = 0; i < chars.length; i += perCol) cols.push(chars.slice(i, i + perCol))
+  }
+  const w = Math.max(1, Math.ceil(Math.max(t.boxWidth, cols.length * colW + t.size * 0.2)))
+  const h = Math.max(1, Math.ceil(maxH))
+  const c = new OffscreenCanvas(w, h)
+  const g = c.getContext('2d')!
+  g.font = fontCss(t)
+  g.fillStyle = t.color
+  g.textAlign = 'center'
+  g.textBaseline = 'top'
+  cols.forEach((col, ci) => {
+    const x = w - (ci + 0.5) * colW
+    const used = col.length * step
+    const y0 = t.align === 'center' ? (h - used) / 2 : t.align === 'right' ? h - used : 0 // 세로쓰기에서 정렬 = 위·가운데·아래
+    col.forEach((ch, i) => g.fillText(ch, x, y0 + i * step))
+  })
+  return { width: w, height: h, data: g.getImageData(0, 0, w, h).data }
+}
+
 /** 문자 데이터 → 비트맵 (상자 크기 = 비트맵 크기) */
 export function renderText(t: TextData): Bitmap {
+  if (t.vertical) return renderVertical(t)
   const w = Math.max(1, Math.ceil(t.boxWidth))
   const measure = new OffscreenCanvas(1, 1).getContext('2d')!
   measure.font = fontCss(t)

@@ -35,6 +35,9 @@ SOFTWARE.
 |---|---|---|
 | @imgly/background-removal (1.4.5 내장 · 1.7.0 온라인) | AGPL-3.0 | AI 배경 제거 |
 | onnxruntime-web | MIT | 모델 추론 |
+| SlimSAM (Xenova/slimsam-50-uniform, Segment Anything 기반) | Apache-2.0 | AI 개체 선택 모델 (내장) |
+| @huggingface/transformers (transformers.js) | Apache-2.0 | 개체 선택 모델 실행 |
+| ag-psd | MIT | PSD 열기·저장 |
 | React, MUI, Emotion | MIT | UI |
 | fflate | MIT | .shcomp 압축 |
 | heic2any, utif2 | MIT | HEIC·TIFF 디코딩 |

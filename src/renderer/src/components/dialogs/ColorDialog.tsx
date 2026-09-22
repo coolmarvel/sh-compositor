@@ -80,7 +80,7 @@ export default function ColorDialog({ title, value, onClose, onApply }: { title:
       title={title}
       onClose={onClose}
       onEnter={apply}
-      width={440}
+      width={480}
       actions={
         <>
           <Button variant="outlined" onClick={onClose}>
@@ -144,23 +144,42 @@ export default function ColorDialog({ title, value, onClose, onApply }: { title:
             <Box title="새 색" sx={{ flex: 1, bgcolor: toHex(rgb) }} />
             <Box title="현재 색 (클릭 = 되돌리기)" onClick={() => setRgb(value)} sx={{ flex: 1, bgcolor: toHex(value), cursor: 'pointer' }} />
           </Box>
-          {(['R', 'G', 'B'] as const).map((k, i) => (
-            <Row key={k} label={k} labelWidth={14}>
-              <BarInput
-                type="number"
-                width={60}
-                value={String(rgb[i])}
-                ariaLabel={k}
-                onChange={(v) => {
-                  const n = Math.max(0, Math.min(255, Math.round(Number(v))))
-                  if (!Number.isFinite(n)) return
-                  const c = [...rgb] as RGB
-                  c[i] = n
-                  setRgb(c)
-                }}
-              />
-            </Row>
-          ))}
+          <Box sx={{ display: 'grid', gridTemplateRows: 'repeat(3, auto)', gridAutoFlow: 'column', columnGap: '10px', rowGap: '4px' }}>
+            {(['R', 'G', 'B'] as const).map((k, i) => (
+              <Row key={k} label={k} labelWidth={14}>
+                <BarInput
+                  type="number"
+                  width={52}
+                  value={String(rgb[i])}
+                  ariaLabel={k}
+                  onChange={(v) => {
+                    const n = Math.max(0, Math.min(255, Math.round(Number(v))))
+                    if (!Number.isFinite(n)) return
+                    const c = [...rgb] as RGB
+                    c[i] = n
+                    setRgb(c)
+                  }}
+                />
+              </Row>
+            ))}
+            {(['H', 'S', 'B'] as const).map((k, i) => (
+              <Row key={k} label={k} labelWidth={14}>
+                <BarInput
+                  type="number"
+                  width={52}
+                  value={String(Math.round(i === 0 ? hsv[0] : hsv[i] * 100))}
+                  ariaLabel={k === 'H' ? '색조(도)' : k === 'S' ? '채도(%)' : '명도(%)'}
+                  onChange={(v) => {
+                    const n = Number(v)
+                    if (!Number.isFinite(n)) return
+                    const next = [...hsv] as [number, number, number]
+                    next[i] = i === 0 ? Math.max(0, Math.min(359.9, n)) : Math.max(0, Math.min(100, n)) / 100
+                    setHsv(next)
+                  }}
+                />
+              </Row>
+            ))}
+          </Box>
           <Row label="#" labelWidth={14}>
             <BarInput
               value={hexDraft ?? toHex(rgb).slice(1)}

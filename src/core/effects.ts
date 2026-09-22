@@ -32,12 +32,26 @@ export interface OverlayEffect {
   opacity: number
 }
 
+export interface GlowEffect {
+  enabled: boolean
+  /** 번지는 크기 px */
+  size: number
+  /** 퍼짐 % — 번지기 전에 모양을 얼마나 넓힐지 (100 이면 딱딱한 테두리) */
+  spread: number
+  color: string
+  opacity: number
+}
+
 export interface LayerEffects {
   stroke: StrokeEffect
   shadow: ShadowEffect
   overlay: OverlayEffect
   innerShadow: ShadowEffect
+  /** 외부 광선 (v1.1 — 없으면 끔) */
+  outerGlow?: GlowEffect
 }
+
+export const DEFAULT_GLOW: GlowEffect = { enabled: false, size: 20, spread: 0, color: '#ffffbe', opacity: 0.75 }
 
 /** Compositor 각 효과의 기본값 (외곽선 4px 검정 · 그림자 90°/20/20/50% · 안쪽 그림자 90°/10/10/50%) */
 export const DEFAULT_EFFECTS: LayerEffects = {
@@ -48,7 +62,7 @@ export const DEFAULT_EFFECTS: LayerEffects = {
 }
 
 export function hasEffects(e: LayerEffects | null | undefined): e is LayerEffects {
-  return !!e && (e.stroke.enabled || e.shadow.enabled || e.overlay.enabled || e.innerShadow.enabled)
+  return !!e && (e.stroke.enabled || e.shadow.enabled || e.overlay.enabled || e.innerShadow.enabled || !!e.outerGlow?.enabled)
 }
 
 /** 그림자가 떨어지는 방향 (px, y 아래로) */
@@ -62,6 +76,7 @@ export function effectsMargin(e: LayerEffects): number {
   let m = 0
   if (e.stroke.enabled && !e.stroke.inside) m = Math.max(m, e.stroke.size)
   if (e.shadow.enabled) m = Math.max(m, e.shadow.distance + e.shadow.blur * 3)
+  if (e.outerGlow?.enabled) m = Math.max(m, e.outerGlow.size * 1.6)
   return hasEffects(e) ? Math.ceil(m) + 2 : 0
 }
 
@@ -71,7 +86,8 @@ export function scaleEffects(e: LayerEffects, s: number): LayerEffects {
     stroke: { ...e.stroke, size: e.stroke.size * s },
     shadow: { ...e.shadow, distance: e.shadow.distance * s, blur: e.shadow.blur * s },
     overlay: e.overlay,
-    innerShadow: { ...e.innerShadow, distance: e.innerShadow.distance * s, blur: e.innerShadow.blur * s }
+    innerShadow: { ...e.innerShadow, distance: e.innerShadow.distance * s, blur: e.innerShadow.blur * s },
+    outerGlow: e.outerGlow ? { ...e.outerGlow, size: e.outerGlow.size * s } : undefined
   }
 }
 
@@ -204,6 +220,13 @@ export function renderEffects(rgba: Uint8ClampedArray, width: number, height: nu
   if (e.shadow.enabled && e.shadow.opacity > 0) {
     const { dx, dy } = shadowOffset(e.shadow)
     fillOver(out, blurMask(shift(shape, W, H, dx, dy), W, H, e.shadow.blur / 2), e.shadow.color, e.shadow.opacity)
+  }
+  // 외부 광선: 그림자 위·원래 픽셀 아래 (포토샵 순서) — 퍼짐만큼 넓힌 뒤 나머지 크기로 흐림
+  const g = e.outerGlow
+  if (g?.enabled && g.opacity > 0 && g.size > 0) {
+    const spreadPx = (g.size * Math.max(0, Math.min(100, g.spread))) / 100
+    const grown = spreadPx >= 1 ? extreme(shape, W, H, spreadPx, false) : shape
+    fillOver(out, blurMask(grown, W, H, Math.max(0.5, (g.size - spreadPx) / 2)), g.color, g.opacity)
   }
   const stroke = e.stroke.enabled && e.stroke.size > 0 && e.stroke.opacity > 0
   if (stroke && !e.stroke.inside) fillOver(out, strokeRing(), e.stroke.color, e.stroke.opacity)

@@ -10,12 +10,14 @@ import { editor } from './editor/store'
 import * as io from './editor/io'
 import { flattenDoc } from '@core/index'
 import { autosaveNow } from './editor/autosave'
+import { retouchReady } from './editor/retouchWasm'
+import { docThumbnail } from './editor/commands'
 
 // 토큰(SSOT)을 :root CSS 변수로 주입 — base.css 와 sx 의 var() 가 이 값을 읽는다. 렌더 전에 1회.
 applyTokens()
 
 // E2E 전용 조회 창구 — main 이 SC_E2E 로 띄울 때만 (?e2e=1)
-if (new URLSearchParams(location.search).has('e2e')) Object.assign(window, { __sc: { editor, io, flattenDoc, autosaveNow } })
+if (new URLSearchParams(location.search).has('e2e')) Object.assign(window, { __sc: { editor, io, flattenDoc, autosaveNow, docThumbnail, retouchReady } })
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

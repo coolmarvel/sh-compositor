@@ -1,13 +1,16 @@
+import { checkLimits } from '@core/limits'
 /**
  * 파일 입출력 — 열기(프로젝트·이미지·HEIC·TIFF)·저장·내보내기·클립보드.
  * Compositor `ProjectController`·`ImageImporter`·`ImageExporter` 에 해당.
  */
 import { editor } from './store'
+import { packDoc } from './pack'
 import {
   deserializeDoc,
+  psdToDoc,
+  isPsd,
   docFromBitmap,
   unpackProject,
-  packProject,
   flattenDoc,
   encodePng,
   decodePng,
@@ -16,6 +19,7 @@ import {
   insertLayer,
   identityTransform,
   cropBitmap,
+  opaqueBounds,
   type Bitmap,
   type Doc
 } from '@core/index'
@@ -36,11 +40,19 @@ export async function decodeImage(bytes: Uint8Array, name: string): Promise<{ bi
   } else if (/\.tiff?$/.test(lower) || isTiff(bytes)) {
     const UTIF = await import('utif2')
     const ifds = UTIF.decode(bytes.buffer as ArrayBuffer)
+    if (!ifds.length) throw new Error('TIFF 이미지가 없습니다.')
+    const limit = checkLimits(ifds[0].width, ifds[0].height)
+    if (limit) throw new Error(limit)
     UTIF.decodeImage(bytes.buffer as ArrayBuffer, ifds[0])
     const rgba = UTIF.toRGBA8(ifds[0])
     return { bitmap: { width: ifds[0].width, height: ifds[0].height, data: new Uint8ClampedArray(rgba.buffer.slice(0)) }, dpi: null }
   }
   const bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'default' })
+  const limit = checkLimits(bmp.width, bmp.height)
+  if (limit) {
+    bmp.close()
+    throw new Error(limit)
+  }
   const c = new OffscreenCanvas(bmp.width, bmp.height)
   const x = c.getContext('2d', { willReadFrequently: true })!
   x.drawImage(bmp, 0, 0)
@@ -52,8 +64,23 @@ export async function decodeImage(bytes: Uint8Array, name: string): Promise<{ bi
 const isHeic = (b: Uint8Array): boolean => b.length > 12 && String.fromCharCode(...b.subarray(4, 12)).match(/ftyp(heic|heix|mif1|msf1|hevc)/) !== null
 const isTiff = (b: Uint8Array): boolean => b.length > 4 && ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 42) || (b[0] === 0x4d && b[1] === 0x4d && b[3] === 42))
 
-/** 파일 하나 열기 — .shcomp 면 프로젝트, 아니면 이미지 한 장짜리 새 문서 */
+/** 열기·저장할 때 경로를 기억할 형식 (다시 저장하면 같은 형식으로) */
+export const keepsPath = (name: string): boolean => /\.(shcomp|psd)$/i.test(name)
+
+/** PSD 에서 옮기지 못한 것 안내 */
+function psdNotice(action: string, warnings: string[]): void {
+  if (!warnings.length) return
+  editor.toast('info', `${action}했습니다. 다만 ${warnings.length}가지는 그대로 옮기지 못했습니다: ${warnings.slice(0, 3).join(' / ')}${warnings.length > 3 ? ' …' : ''}`)
+}
+
+/** 파일 하나 열기 — .shcomp 면 프로젝트, PSD 면 레이어째, 아니면 이미지 한 장짜리 새 문서 */
 export async function openBytes(name: string, bytes: Uint8Array, path: string | null): Promise<void> {
+  if (/\.ps[db]$/i.test(name) || isPsd(bytes)) {
+    const r = psdToDoc(bytes, stripExt(name))
+    editor.addTab(r.doc, stripExt(name), /\.psd$/i.test(name) ? path : null)
+    psdNotice('PSD 를 열었', r.warnings)
+    return
+  }
   if (/\.shcomp$/i.test(name) || (bytes[0] === 0x50 && bytes[1] === 0x4b)) {
     const doc = unpackProject(bytes)
     editor.addTab(doc, stripExt(name), path)
@@ -66,7 +93,7 @@ export async function openBytes(name: string, bytes: Uint8Array, path: string | 
 export async function openDialog(): Promise<void> {
   const files = await window.api.open('any')
   for (const f of files) {
-    await editor.busy(`${f.name} 여는 중…`, () => openBytes(f.name, f.bytes, /\.shcomp$/i.test(f.name) ? f.path : null))
+    await editor.busy(`${f.name} 여는 중…`, () => openBytes(f.name, f.bytes, keepsPath(f.name) ? f.path : null))
     addRecent(f.path)
   }
 }
@@ -76,7 +103,7 @@ export async function openPaths(paths: string[]): Promise<void> {
     const ok = await editor.busy(`${p.split(/[\\/]/).pop()} 여는 중…`, async () => {
       if (/\.comp[\\/]?$/i.test(p)) return openCompFolder(p)
       const f = await window.api.read(p)
-      await openBytes(f.name, f.bytes, /\.shcomp$/i.test(f.name) ? f.path : null)
+      await openBytes(f.name, f.bytes, keepsPath(f.name) ? f.path : null)
       return true
     })
     if (ok) addRecent(p)
@@ -134,22 +161,25 @@ export async function importAsLayer(bytes: Uint8Array, name: string, at?: { x: n
 }
 
 /** 저장 (경로 없으면 다른 이름으로) */
-export async function saveProject(asNew = false): Promise<boolean> {
+export async function saveProject(asNew = false, kind: 'project' | 'psd' = 'project'): Promise<boolean> {
   const tab = editor.tab
   if (!tab) return false
   let path = asNew ? null : tab.path
-  if (!path) path = await window.api.saveAs(`${tab.name}.shcomp`, 'project')
+  if (!path) path = await window.api.saveAs(`${tab.name}.${kind === 'psd' ? 'psd' : 'shcomp'}`, kind)
   if (!path) return false
   const doc = tab.history.present
-  const ok = await editor.busy('저장 중…', async () => {
-    await window.api.write(path!, packProject(doc))
+  const psd = /\.psd$/i.test(path)
+  const ok = await editor.busy(psd ? 'PSD 저장 중…' : '저장 중…', async () => {
+    const r = await packDoc(doc, psd ? 'psd' : 'shcomp')
+    await window.api.write(path!, r.bytes)
+    if (psd) psdNotice('PSD 로 저장', r.warnings)
     return true
   })
   if (!ok) return false
   const name = stripExt(path.split(/[\\/]/).pop() ?? tab.name)
-  editor.markSaved(path, name)
+  editor.markSaved(tab.id, doc, path, name)
   addRecent(path)
-  editor.toast('ok', `저장했습니다: ${path}`)
+  if (!psd || !editor.state.toast || editor.state.toast.kind !== 'info') editor.toast('ok', `저장했습니다: ${path}`)
   return true
 }
 
@@ -237,4 +267,47 @@ export async function pasteFromClipboard(): Promise<void> {
   if (!doc) return openBytes('붙여넣기.png', png, null)
   const at = doc.selection?.bounds ? { x: doc.selection.bounds.x + doc.selection.bounds.w / 2, y: doc.selection.bounds.y + doc.selection.bounds.h / 2 } : undefined
   await importAsLayer(png, '붙여넣기', at)
+}
+
+/** 파일 ▸ 내보내기 ▸ 레이어를 각각 PNG 로 — 보이는 픽셀·문자 레이어마다 한 장 (마스크·효과 포함, 투명 여백은 잘라서) */
+export async function exportLayers(trim = true): Promise<void> {
+  const tab = editor.tab
+  if (!tab) return
+  const dir = await window.api.chooseDir('레이어를 저장할 폴더')
+  if (!dir) return
+  await editor.busy('레이어 내보내는 중…', async () => {
+    const doc = tab.history.present
+    const used = new Set<string>()
+    let n = 0
+    for (const l of doc.layers) {
+      if (!l.visible || !l.bitmap || (l.kind !== 'pixel' && l.kind !== 'text')) continue
+      let bmp = flattenDoc({ ...doc, selection: null, layers: [{ ...l, parentId: null, clip: false, visible: true }] })
+      if (trim) {
+        const b = opaqueBounds(bmp)
+        if (!b) continue
+        bmp = cropBitmap(bmp, b.x, b.y, b.w, b.h)
+      }
+      const base = (l.name.replace(/[\\/:*?"<>|]/g, '_').trim() || '레이어').slice(0, 55)
+      let name = base
+      for (let k = 2; used.has(name.toLowerCase()); k++) name = `${base} (${k})`
+      used.add(name.toLowerCase())
+      await window.api.write(`${dir}/${name}.png`, encodePng(bmp.width, bmp.height, bmp.data, doc.resolution))
+      n++
+    }
+    editor.toast(n ? 'ok' : 'info', n ? `레이어 ${n}장을 내보냈습니다: ${dir}` : '내보낼 픽셀 레이어가 없습니다.')
+  })
+}
+
+/** 파일 ▸ 내보내기 ▸ 선택 영역을 PNG 로 — 보이는 그대로, 선택 모양대로 */
+export async function exportSelection(): Promise<void> {
+  const tab = editor.tab
+  const doc = tab?.history.present
+  if (!tab || !doc?.selection?.bounds) return editor.toast('info', '내보낼 영역을 먼저 선택하세요.')
+  const path = await window.api.saveAs(`${tab.name} 선택.png`, 'png')
+  if (!path) return
+  await editor.busy('선택 영역 내보내는 중…', async () => {
+    const bmp = mergedBitmap(doc, true)
+    await window.api.write(path, encodePng(bmp.width, bmp.height, bmp.data, doc.resolution))
+    editor.toast('ok', `내보냈습니다: ${path}`)
+  })
 }

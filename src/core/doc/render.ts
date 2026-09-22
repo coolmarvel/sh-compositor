@@ -76,6 +76,19 @@ export function rasterizeBitmap(bitmap: Bitmap, layer: Pick<Layer, 'transform'>,
   const x1 = Math.min(docW, bb.x + bb.w)
   const y1 = Math.min(docH, bb.y + bb.h)
   if (x1 <= x0 || y1 <= y0) return null
+  // 정수 이동·원래 크기는 보간 없이 행 복사. 반환 버퍼는 호출자가 마스크를 곱할 수 있는 독립 사본이다.
+  if (t.rotation === 0 && !t.flipH && !t.flipV && t.width === bitmap.width && t.height === bitmap.height && Number.isInteger(t.x) && Number.isInteger(t.y)) {
+    const width = x1 - x0,
+      height = y1 - y0
+    const data = new Uint8ClampedArray(width * height * 4)
+    for (let y = 0; y < height; y++) {
+      const offset = ((y0 + y - t.y) * bitmap.width + x0 - t.x) * 4
+      data.set(bitmap.data.subarray(offset, offset + width * 4), y * width * 4)
+    }
+    // 보간 경로는 알파 0 픽셀의 숨은 RGB를 0으로 만든다.
+    for (let i = 0; i < data.length; i += 4) if (!data[i + 3]) data[i] = data[i + 1] = data[i + 2] = 0
+    return { x: x0, y: y0, width, height, data }
+  }
   // 크게 줄일 때는 미리 2배씩 줄인 사본에서 샘플
   let src = bitmap
   const scale = Math.min(Math.abs(t.width) / bitmap.width, Math.abs(t.height) / bitmap.height)
@@ -169,6 +182,7 @@ export function rasterizeLayer(layer: Layer, docW: number, docH: number): Raster
 function compositeRaster(dst: Uint8ClampedArray, docW: number, docH: number, src: Raster, layer: Pick<Layer, 'blend' | 'opacity'>, coverage: Float32Array | null): void {
   const cb: [number, number, number] = [0, 0, 0]
   const cs: [number, number, number] = [0, 0, 0]
+  const result: [number, number, number, number] = [0, 0, 0, 0]
   for (let y = 0; y < src.height; y++) {
     const ty = src.y + y
     if (ty < 0 || ty >= docH) continue
@@ -187,7 +201,7 @@ function compositeRaster(dst: Uint8ClampedArray, docW: number, docH: number, src
       cs[0] = src.data[s] / 255
       cs[1] = src.data[s + 1] / 255
       cs[2] = src.data[s + 2] / 255
-      const o = compositePixel(layer.blend, cb, ab, cs, as)
+      const o = compositePixel(layer.blend, cb, ab, cs, as, result)
       dst[d] = o[0] * 255
       dst[d + 1] = o[1] * 255
       dst[d + 2] = o[2] * 255
@@ -239,14 +253,15 @@ function alphaCoverage(r: Raster | null, docW: number, docH: number): Float32Arr
 /** 한 부모 아래의 레이어들을 dst 에 합성 */
 function compositeChildren(doc: Doc, parentId: string | null, dst: Uint8ClampedArray, skip?: Set<string>): void {
   const { width: W, height: H } = doc
-  const children = doc.layers.filter((l) => l.parentId === parentId)
+  const children = doc.layers.filter((l) => l.parentId === parentId && !skip?.has(l.id))
   let base: Float32Array | null = null // 현재 클리핑 기준 레이어의 알파
-  for (const layer of children) {
-    if (skip?.has(layer.id)) continue
+  for (let index = 0; index < children.length; index++) {
+    const layer = children[index]
+    const needsBase = !layer.clip && !!children[index + 1]?.clip
     const clipCov = layer.clip ? base : null
     if (!layer.clip) base = null
     if (!layer.visible) {
-      if (!layer.clip) base = new Float32Array(W * H) // 숨긴 기준 위의 클리핑 레이어는 보이지 않는다
+      if (needsBase) base = new Float32Array(W * H) // 숨긴 기준 위의 클리핑 레이어는 보이지 않는다
       continue
     }
     if (layer.clip && !clipCov) continue
@@ -256,7 +271,7 @@ function compositeChildren(doc: Doc, parentId: string | null, dst: Uint8ClampedA
       const r: Raster = { x: 0, y: 0, width: W, height: H, data: inner }
       if (layer.mask?.enabled) applyMask(r, { ...layer, transform: { x: 0, y: 0, width: W, height: H, rotation: 0, flipH: false, flipV: false } }, W, H)
       compositeRaster(dst, W, H, r, layer, clipCov)
-      if (!layer.clip) base = alphaCoverage(r, W, H)
+      if (needsBase) base = alphaCoverage(r, W, H)
       continue
     }
     if (layer.kind === 'adjustment') {
@@ -264,7 +279,7 @@ function compositeChildren(doc: Doc, parentId: string | null, dst: Uint8ClampedA
       continue
     }
     const r = rasterizeLayer(layer, W, H)
-    if (!layer.clip) base = alphaCoverage(r, W, H)
+    if (needsBase) base = alphaCoverage(r, W, H)
     if (r) compositeRaster(dst, W, H, r, layer, clipCov)
   }
 }

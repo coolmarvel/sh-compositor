@@ -66,11 +66,7 @@ export default function TabStrip(): JSX.Element | null {
             <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {t.name}
             </Box>
-            {dirty && (
-              <Box component="span" aria-label="저장 안 함" sx={{ color: color.accent, fontSize: 10 }}>
-                ●
-              </Box>
-            )}
+            {dirty && <Box component="span" aria-label="저장 안 함" title="저장하지 않은 변경이 있습니다" sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color.accent, flexShrink: 0 }} />}
             <ButtonBase
               aria-label={`${t.name} 닫기`}
               onClick={(e) => {

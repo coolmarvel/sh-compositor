@@ -8,12 +8,13 @@
  */
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 import { encodePng, decodePng } from '../png'
+import { MAX_SIDE, MAX_PIXELS } from '../limits'
 import type { Doc, Layer, BlendMode, LayerTransform } from './types'
 
 const FORMAT = 'com.compositor.project'
 export const PROJECT_VERSION = 7
 /** Compositor 와 같은 한도 */
-const LIMITS = { side: 30000, pixels: 100_000_000, layers: 10000, manifest: 4 * 1024 * 1024 }
+const LIMITS = { side: MAX_SIDE, pixels: MAX_PIXELS, layers: 10000, manifest: 4 * 1024 * 1024 }
 
 const BLEND_NAMES: Record<BlendMode, string> = {
   normal: 'Normal',
@@ -68,7 +69,9 @@ export function serializeDoc(doc: Doc): Record<string, Uint8Array> {
       shEffects: l.effects ?? undefined,
       shAdjustment: l.adjustment ?? undefined,
       shText: l.text ?? undefined,
-      shCollapsed: l.collapsed || undefined
+      shCollapsed: l.collapsed || undefined,
+      shShape: l.shape ?? undefined,
+      shLock: l.lock && (l.lock.alpha || l.lock.pixels || l.lock.position) ? l.lock : undefined
     }
     if (l.bitmap) {
       rec.imageFile = `${l.id}.png`
@@ -101,6 +104,8 @@ export function serializeDoc(doc: Doc): Record<string, Uint8Array> {
     width: doc.width,
     height: doc.height,
     activeLayerID: doc.activeId,
+    // 우리 확장 (Compositor 는 모르는 키라 무시한다)
+    shGuides: doc.guides && (doc.guides.v.length || doc.guides.h.length) ? doc.guides : undefined,
     layers
   }
   files['manifest.json'] = strToU8(JSON.stringify(manifest, null, 2))
@@ -149,11 +154,24 @@ export function deserializeDoc(files: Record<string, Uint8Array>): Doc {
       effects: r.shEffects ?? null,
       adjustment: r.shAdjustment ?? null,
       text: r.shText ?? null,
-      collapsed: !!r.shCollapsed
+      collapsed: !!r.shCollapsed,
+      shape: r.shShape && typeof r.shShape.kind === 'string' ? r.shShape : undefined,
+      lock: r.shLock ? { alpha: !!r.shLock.alpha, pixels: !!r.shLock.pixels, position: !!r.shLock.position } : undefined
     }
     return layer
   })
-  return { id: String(m.documentID), width: m.width, height: m.height, resolution: m.resolution ?? 72, layers, activeId: m.activeLayerID ?? layers[layers.length - 1]?.id ?? null, selection: null }
+  const num = (a: unknown): number[] => (Array.isArray(a) ? a.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)).slice(0, 500) : [])
+  const guides = m.shGuides ? { v: num(m.shGuides.v), h: num(m.shGuides.h) } : undefined
+  return {
+    id: String(m.documentID),
+    width: m.width,
+    height: m.height,
+    resolution: m.resolution ?? 72,
+    layers,
+    activeId: m.activeLayerID ?? layers[layers.length - 1]?.id ?? null,
+    selection: null,
+    guides
+  }
 }
 
 /** .shcomp (zip) 바이트 */

@@ -6,11 +6,12 @@
  * 문서 변경은 전부 `commit(doc, label)` 을 거쳐 실행취소 이력에 쌓인다.
  */
 import { useSyncExternalStore } from 'react'
-import { startHistory, record, replace, silent, undo as hUndo, redo as hRedo, DEFAULT_BRUSH, type History, type Doc, type Bitmap, type BrushSettings, type Anchor } from '@core/index'
+import { startHistory, record, replace, silent, undo as hUndo, redo as hRedo, DEFAULT_BRUSH, type History, type Doc, type BrushSettings, type Anchor, type MoreAdjustKind } from '../../../core/index'
 import type { View } from '../gl/GLRenderer'
 import { adaptView } from './view'
 
-export type Tool = 'move' | 'marquee' | 'lasso' | 'wand' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur' | 'gradient' | 'shape' | 'type' | 'eyedropper' | 'hand' | 'zoom' | 'idle'
+export type Tool =
+  'move' | 'marquee' | 'lasso' | 'wand' | 'objectSelect' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur' | 'gradient' | 'shape' | 'type' | 'eyedropper' | 'hand' | 'zoom' | 'idle'
 
 export interface Tab {
   id: string
@@ -22,6 +23,8 @@ export interface Tab {
   saved: Doc | null
   /** null = 다음 그리기에서 화면에 맞춤 */
   view: View | null
+  /** 작업 내역 스냅샷 (이름 붙은 지점 — 실행취소 한도와 상관없이 남는다) */
+  snapshots: { id: string; name: string; doc: Doc }[]
 }
 
 export interface ToolSettings {
@@ -30,6 +33,8 @@ export interface ToolSettings {
   wandTolerance: number
   wandContiguous: boolean
   wandSampleAll: boolean
+  /** 개체 선택: 사각형으로 감싸기 / 올가미로 감싸기 */
+  objectMode: 'rect' | 'lasso' | 'paint'
   brush: BrushSettings
   brushMode: 'paint' | 'erase'
   blurMode: 'blur' | 'smudge' | 'liquify'
@@ -50,11 +55,26 @@ export interface ToolSettings {
   typeBold: boolean
   typeItalic: boolean
   typeAlign: 'left' | 'center' | 'right'
+  typeLineHeight: number
+  typeTracking: number
+  typeVertical: boolean
   cropRatio: string
   cropDelete: boolean
   sampleRing: boolean
   autoSelect: boolean
   showTransformControls: boolean
+  // 보기 (눈금자·안내선)
+  showRulers: boolean
+  showGuides: boolean
+  snapGuides: boolean
+  lockGuides: boolean
+  // 환경 설정
+  /** 실행취소 단계 수 */
+  historyLimit: number
+  /** 자동 저장 간격(분), 0 = 끔 */
+  autosaveMinutes: number
+  /** 끄는 동안 화면 해상도를 낮춰 빠르게 (느린 PC·GPU 없는 환경) */
+  fastInteract: boolean
 }
 
 export const DEFAULT_SETTINGS: ToolSettings = {
@@ -63,6 +83,7 @@ export const DEFAULT_SETTINGS: ToolSettings = {
   wandTolerance: 32,
   wandContiguous: true,
   wandSampleAll: false,
+  objectMode: 'rect',
   brush: DEFAULT_BRUSH,
   brushMode: 'paint',
   blurMode: 'blur',
@@ -83,11 +104,21 @@ export const DEFAULT_SETTINGS: ToolSettings = {
   typeBold: false,
   typeItalic: false,
   typeAlign: 'left',
+  typeLineHeight: 1.25,
+  typeTracking: 0,
+  typeVertical: false,
   cropRatio: 'free',
   cropDelete: false,
   sampleRing: true,
   autoSelect: false,
-  showTransformControls: true
+  showTransformControls: true,
+  showRulers: true,
+  showGuides: true,
+  snapGuides: true,
+  lockGuides: false,
+  historyLimit: 80,
+  autosaveMinutes: 1,
+  fastInteract: true
 }
 
 export type DialogKind =
@@ -99,12 +130,18 @@ export type DialogKind =
   | { kind: 'effects'; layerId: string }
   | { kind: 'export'; format: 'jpeg' | 'webp' }
   | { kind: 'recover'; items: { id: string; name: string; path: string | null; savedAt: number }[] }
-  | { kind: 'selectAmount'; op: 'expand' | 'contract' | 'feather' | 'maskFeather' }
+  | { kind: 'selectAmount'; op: 'expand' | 'contract' | 'feather' | 'maskFeather' | 'smooth' }
+  | { kind: 'stroke' }
   | { kind: 'color'; which: 'fg' | 'bg' }
   | { kind: 'rename'; layerId: string }
   | { kind: 'confirmClose'; tabIds: string[]; quit: boolean }
   | { kind: 'about' }
+  | { kind: 'help' }
   | { kind: 'removeBg' }
+  | { kind: 'newGuide' }
+  | { kind: 'preferences' }
+  | { kind: 'refineEdge' }
+  | { kind: 'moreAdjust'; which: MoreAdjustKind }
 
 export interface EditorState {
   tabs: Tab[]
@@ -119,6 +156,8 @@ export interface EditorState {
   maskEditing: boolean
   /** 도구가 진행 중일 때 캔버스가 대신 그리는 문서 (칠하는 중·그라데이션 미리보기) — 이력 밖 */
   preview: Doc | null
+  /** preview 를 만들 때의 문서 — 문서가 바뀌면(다른 명령·실행취소) 그 미리보기는 낡은 것이라 그리지 않는다 */
+  previewBase: Doc | null
   status: string
   progress: { label: string; value?: number } | null
   toast: { kind: 'ok' | 'err' | 'info'; text: string } | null
@@ -144,7 +183,7 @@ function withView(t: Tab): Tab {
 let idSeq = 0
 export const tabId = (): string => `t${++idSeq}`
 
-class EditorStore {
+export class EditorStore {
   private listeners = new Set<() => void>()
   state: EditorState = {
     tabs: [],
@@ -156,6 +195,7 @@ class EditorStore {
     selectedIds: [],
     maskEditing: false,
     preview: null,
+    previewBase: null,
     status: '',
     progress: null,
     toast: null,
@@ -189,7 +229,7 @@ class EditorStore {
   }
 
   addTab(doc: Doc, name: string, path: string | null = null, label = '열기'): void {
-    const t: Tab = { id: tabId(), name, path, history: startHistory(doc, label), saved: path ? doc : null, view: null }
+    const t: Tab = { id: tabId(), name, path, history: startHistory(doc, label), saved: path ? doc : null, view: null, snapshots: [] }
     this.set({ tabs: [...this.state.tabs, t], activeTabId: t.id, selectedIds: doc.activeId ? [doc.activeId] : [], maskEditing: false })
   }
 
@@ -212,9 +252,9 @@ class EditorStore {
     if (t) this.patchTab(t.id, { view })
   }
 
-  markSaved(path: string, name: string): void {
-    const t = this.tab
-    if (t) this.patchTab(t.id, { path, name, saved: t.history.present })
+  markSaved(tabId: string, snapshot: Doc, path: string, name: string): void {
+    const t = this.state.tabs.find((t) => t.id === tabId)
+    if (t) this.patchTab(t.id, { path, name, saved: snapshot })
   }
 
   isDirty(t: Tab): boolean {
@@ -226,7 +266,7 @@ class EditorStore {
   commit(doc: Doc, label: string): void {
     const t = this.tab
     if (!t) return
-    this.patchTab(t.id, { history: record(t.history, doc, label) })
+    this.patchTab(t.id, { history: record(t.history, doc, label, this.state.settings.historyLimit) })
     this.syncSelected()
   }
   /**
@@ -236,7 +276,7 @@ class EditorStore {
   commitGesture(doc: Doc, label: string): void {
     const t = this.tab
     if (!t) return
-    const history = this.gestureOpen ? replace(t.history, doc, label) : record(t.history, doc, label)
+    const history = this.gestureOpen ? replace(t.history, doc, label) : record(t.history, doc, label, this.state.settings.historyLimit)
     this.gestureOpen = true
     this.patchTab(t.id, { history })
   }
@@ -316,6 +356,33 @@ class EditorStore {
     } finally {
       this.set({ progress: null })
     }
+  }
+
+  /** 도구·대화상자 미리보기 — 지금 문서에 묶는다 (2026-09-21 사고: 확정 안 한 그라데이션 미리보기가 남아 배경 제거 결과가 화면에 안 보임) */
+  setPreview(doc: Doc | null): void {
+    this.set({ preview: doc, previewBase: doc ? this.doc : null })
+  }
+  /** 캔버스가 그릴 문서 — 유효한 미리보기가 있으면 그것 */
+  get shownDoc(): Doc | null {
+    const d = this.doc
+    const p = this.state.preview
+    return p && this.state.previewBase === d ? p : d
+  }
+
+  /** 스냅샷 — 지금 문서에 이름을 붙여 남긴다 */
+  addSnapshot(name?: string): void {
+    const t = this.tab
+    if (!t) return
+    const n = name ?? `스냅샷 ${t.snapshots.length + 1}`
+    this.patchTab(t.id, { snapshots: [...t.snapshots, { id: `${Date.now()}-${t.snapshots.length}`, name: n, doc: t.history.present }] })
+  }
+  removeSnapshot(id: string): void {
+    const t = this.tab
+    if (t) this.patchTab(t.id, { snapshots: t.snapshots.filter((s) => s.id !== id) })
+  }
+  restoreSnapshot(id: string): void {
+    const s = this.tab?.snapshots.find((x) => x.id === id)
+    if (s) this.commit(s.doc, `스냅샷: ${s.name}`)
   }
 
   requestRender(): void {

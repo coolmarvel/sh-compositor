@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+function subscribe<T>(channel: string, callback: (value: T) => void): () => void {
+  const listener = (_event: Electron.IpcRendererEvent, value: T): void => callback(value)
+  ipcRenderer.on(channel, listener)
+  return () => {
+    ipcRenderer.removeListener(channel, listener)
+  }
+}
+
 export interface OpenedFile {
   path: string
   name: string
@@ -10,7 +18,8 @@ export interface OpenedFile {
 const api = {
   open: (kind: 'project' | 'image' | 'any'): Promise<OpenedFile[]> => ipcRenderer.invoke('fs:open', kind),
   read: (path: string): Promise<OpenedFile> => ipcRenderer.invoke('fs:read', path),
-  saveAs: (defaultName: string, kind: 'project' | 'png' | 'jpeg' | 'webp'): Promise<string | null> => ipcRenderer.invoke('fs:saveAs', defaultName, kind),
+  saveAs: (defaultName: string, kind: 'project' | 'psd' | 'png' | 'jpeg' | 'webp'): Promise<string | null> => ipcRenderer.invoke('fs:saveAs', defaultName, kind),
+  chooseDir: (title: string): Promise<string | null> => ipcRenderer.invoke('fs:chooseDir', title),
   /** Compositor .comp 폴더 (경로를 주면 대화상자 없이) */
   openCompFolder: (path?: string): Promise<{ path: string; name: string; files: Record<string, Uint8Array> } | null> => ipcRenderer.invoke('fs:openCompFolder', path),
   recovery: {
@@ -33,22 +42,14 @@ const api = {
     close: (): Promise<void> => ipcRenderer.invoke('win:close'),
     confirmClose: (): Promise<void> => ipcRenderer.invoke('win:confirmClose'),
     isMaximized: (): Promise<boolean> => ipcRenderer.invoke('win:isMaximized'),
-    onMaximized: (cb: (maximized: boolean) => void): void => {
-      ipcRenderer.on('win:maximized', (_e, v: boolean) => cb(v))
-    },
-    onCloseRequest: (cb: () => void): void => {
-      ipcRenderer.on('win:closeRequest', () => cb())
-    }
+    onMaximized: (cb: (maximized: boolean) => void): (() => void) => subscribe('win:maximized', cb),
+    onCloseRequest: (cb: () => void): (() => void) => subscribe('win:closeRequest', cb)
   },
   pendingOpen: (): Promise<string[]> => ipcRenderer.invoke('app:pendingOpen'),
-  onOpenFiles: (cb: (paths: string[]) => void): void => {
-    ipcRenderer.on('app:openFiles', (_e, p: string[]) => cb(p))
-  },
+  onOpenFiles: (cb: (paths: string[]) => void): (() => void) => subscribe('app:openFiles', cb),
   /** AI 배경 제거 모델 에셋 베이스 URL */
   bgAssetsUrl: 'bgrm://assets/',
-  onRecovered: (cb: (reason: string) => void): void => {
-    ipcRenderer.on('app:recovered', (_e, reason: string) => cb(reason))
-  }
+  onRecovered: (cb: (reason: string) => void): (() => void) => subscribe('app:recovered', cb)
 }
 
 export type Api = typeof api

@@ -1,3 +1,5 @@
+import { blurDab, smudgeDab, pushDab } from '@core/retouch'
+import { nativeRetouch } from '../editor/retouchWasm'
 /**
  * 칠하기 계열 도구 — 브러시·지우개(B·E), 흐림/문지르기/리퀴파이(R), 복제 도장(S), 스팟 복구(J).
  * 출처: Compositor `BrushStroke`·`SmudgeLiquify`·`CloneStamp`·`HealPixels.c`.
@@ -10,8 +12,8 @@
  * 키: [ ] 크기, Shift+[ ] 경도, 1~0 불투명도(강도), Shift+클릭 = 지난 점에서 직선.
  */
 import { editor } from '../editor/store'
-import { bakeLayer, selWeight } from '../editor/pixels'
-import { StrokeCoverage, applyStroke, tipAlpha, getLayer, updateLayer, flattenDoc, contentFill, type Doc, type Bitmap, type BrushSettings } from '@core/index'
+import { bakeLayer, selWeight, pixelsLocked } from '../editor/pixels'
+import { StrokeCoverage, applyStroke, getLayer, updateLayer, flattenDoc, contentFill, type Doc, type Bitmap, type BrushSettings } from '@core/index'
 import type { ToolHandler, ToolCtx, PointerInfo, Pt } from './types'
 
 interface Session {
@@ -60,10 +62,11 @@ function begin(c: ToolCtx, kind: Kind, p: PointerInfo): Session | null {
     return null
   }
   if (l.kind === 'text' && !onMask) {
-    editor.toast('info', '문자 레이어에는 칠할 수 없습니다. 레이어 → 래스터화 후 칠하세요.')
+    editor.toast('info', '문자 레이어에는 칠할 수 없습니다. 레이어 메뉴의 문자 래스터화를 먼저 하세요.')
     return null
   }
   const target = editor.state.maskEditing && l.mask ? 'mask' : 'layer'
+  if (target === 'layer' && pixelsLocked(l, (m) => editor.toast('info', m))) return null
   if (target === 'mask' && kind !== 'brush' && kind !== 'blur') {
     editor.toast('info', '이 도구는 마스크가 아니라 레이어 픽셀에만 씁니다.')
     return null
@@ -87,8 +90,10 @@ function begin(c: ToolCtx, kind: Kind, p: PointerInfo): Session | null {
     extra: {},
     bbox: null
   }
+  // 사본의 텍스처를 GPU 에서 복제 (8K 레이어를 다시 올리지 않게)
+  c.renderer()?.cloneTexture(bmp, live)
   const preview = updateLayer(base, l.id, target === 'mask' ? { mask: { ...bl.mask!, bitmap: live } } : { bitmap: live })
-  editor.set({ preview })
+  editor.setPreview(preview)
   if (kind === 'clone') {
     // 원본: 활성 레이어 자체 또는 보이는 그대로 (획 시작 때 한 번 뜬다)
     const src = editor.state.settings.cloneSampleAll ? flattenDoc(doc).data : bmp.data
@@ -109,6 +114,11 @@ function limitFn(s: Session): ((i: number) => number) | undefined {
 
 function upload(c: ToolCtx, s: Session, r: { x: number; y: number; w: number; h: number } | null): void {
   if (!r) return
+  // 투명 픽셀 잠금: 칠한 영역의 알파를 원래대로 (있던 픽셀 위에만 색이 입혀진다)
+  if (s.target === 'layer' && getLayer(s.base, s.layerId)?.lock?.alpha) {
+    const W = s.live.width
+    for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) s.live.data[(y * W + x) * 4 + 3] = s.orig[(y * W + x) * 4 + 3]
+  }
   c.renderer()?.uploadRect(s.live, r)
   c.redraw()
 }
@@ -126,121 +136,6 @@ function strokeTo(c: ToolCtx, s: Session, p: Pt, pressure: number): void {
     applyStroke({ width: s.live.width, height: s.live.height, data: s.orig }, s.stroke, [v, v, v], 'paint', limitFn(s), s.live.data, r)
   } else applyStroke({ width: s.live.width, height: s.live.height, data: s.orig }, s.stroke, fg, erase ? 'erase' : 'paint', limitFn(s), s.live.data, r)
   upload(c, s, r)
-}
-
-/** 흐림 모드: 덮인 곳을 주변 평균으로 (획 덮임만큼) */
-function blurDab(s: Session, cx: number, cy: number): { x: number; y: number; w: number; h: number } | null {
-  const R = s.stroke.settings.size / 2
-  const x0 = Math.max(0, Math.floor(cx - R))
-  const y0 = Math.max(0, Math.floor(cy - R))
-  const x1 = Math.min(s.live.width - 1, Math.ceil(cx + R))
-  const y1 = Math.min(s.live.height - 1, Math.ceil(cy + R))
-  if (x1 < x0 || y1 < y0) return null
-  const W = s.live.width
-  const d = s.live.data
-  const src = d.slice()
-  const k = Math.max(1, Math.round(R / 6)) // 흐림 반경 = 팁 크기에 비례
-  const lim = limitFn(s)
-  for (let y = y0; y <= y1; y++)
-    for (let x = x0; x <= x1; x++) {
-      const a = tipAlpha(Math.hypot(x + 0.5 - cx, y + 0.5 - cy), R, s.stroke.settings.hardness) * s.stroke.settings.opacity * (lim ? lim(y * W + x) : 1)
-      if (a <= 0) continue
-      let r = 0
-      let g = 0
-      let b = 0
-      let al = 0
-      let n = 0
-      for (let j = -k; j <= k; j += Math.max(1, k >> 1))
-        for (let i = -k; i <= k; i += Math.max(1, k >> 1)) {
-          const xx = Math.min(W - 1, Math.max(0, x + i))
-          const yy = Math.min(s.live.height - 1, Math.max(0, y + j))
-          const o = (yy * W + xx) * 4
-          const w = src[o + 3]
-          r += src[o] * w
-          g += src[o + 1] * w
-          b += src[o + 2] * w
-          al += w
-          n++
-        }
-      const o = (y * W + x) * 4
-      const na = al / n
-      const t = a * 0.35
-      if (al > 0) {
-        d[o] += (r / al - d[o]) * t
-        d[o + 1] += (g / al - d[o + 1]) * t
-        d[o + 2] += (b / al - d[o + 2]) * t
-      }
-      d[o + 3] += (na - d[o + 3]) * t
-    }
-  return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
-}
-
-/** 문지르기: 붓이 머금은 색을 옮기며 섞는다 (Compositor smudge — 머금은 사각형을 다음 점에 떨어뜨림) */
-function smudgeDab(s: Session, from: Pt, to: Pt): { x: number; y: number; w: number; h: number } | null {
-  const R = Math.max(1, s.stroke.settings.size / 2)
-  const W = s.live.width
-  const H = s.live.height
-  const d = s.live.data
-  const lim = limitFn(s)
-  const x0 = Math.max(0, Math.floor(to.x - R))
-  const y0 = Math.max(0, Math.floor(to.y - R))
-  const x1 = Math.min(W - 1, Math.ceil(to.x + R))
-  const y1 = Math.min(H - 1, Math.ceil(to.y + R))
-  if (x1 < x0 || y1 < y0) return null
-  const src = d.slice()
-  const dx = to.x - from.x
-  const dy = to.y - from.y
-  for (let y = y0; y <= y1; y++)
-    for (let x = x0; x <= x1; x++) {
-      const a = tipAlpha(Math.hypot(x + 0.5 - to.x, y + 0.5 - to.y), R, s.stroke.settings.hardness) * s.stroke.settings.opacity * (lim ? lim(y * W + x) : 1)
-      if (a <= 0) continue
-      const sx = Math.min(W - 1, Math.max(0, Math.round(x - dx)))
-      const sy = Math.min(H - 1, Math.max(0, Math.round(y - dy)))
-      const so = (sy * W + sx) * 4
-      const o = (y * W + x) * 4
-      for (let c = 0; c < 4; c++) d[o + c] += (src[so + c] - d[o + c]) * a
-    }
-  return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
-}
-
-/** 리퀴파이(밀기): 붓 안 픽셀을 움직인 방향으로 민다 — 원본에서 거꾸로 표본 (Compositor push) */
-function pushDab(s: Session, from: Pt, to: Pt): { x: number; y: number; w: number; h: number } | null {
-  const R = Math.max(1, s.stroke.settings.size / 2)
-  const W = s.live.width
-  const H = s.live.height
-  const d = s.live.data
-  const lim = limitFn(s)
-  const x0 = Math.max(0, Math.floor(to.x - R))
-  const y0 = Math.max(0, Math.floor(to.y - R))
-  const x1 = Math.min(W - 1, Math.ceil(to.x + R))
-  const y1 = Math.min(H - 1, Math.ceil(to.y + R))
-  if (x1 < x0 || y1 < y0) return null
-  const src = d.slice()
-  const dx = to.x - from.x
-  const dy = to.y - from.y
-  for (let y = y0; y <= y1; y++)
-    for (let x = x0; x <= x1; x++) {
-      const a = tipAlpha(Math.hypot(x + 0.5 - to.x, y + 0.5 - to.y), R, 0) * s.stroke.settings.opacity * (lim ? lim(y * W + x) : 1)
-      if (a <= 0) continue
-      const sxf = x - dx * a
-      const syf = y - dy * a
-      const sx0 = Math.floor(sxf)
-      const sy0 = Math.floor(syf)
-      const fx = sxf - sx0
-      const fy = syf - sy0
-      const o = (y * W + x) * 4
-      for (let c = 0; c < 4; c++) {
-        let v = 0
-        for (let j = 0; j < 2; j++)
-          for (let i = 0; i < 2; i++) {
-            const xx = Math.min(W - 1, Math.max(0, sx0 + i))
-            const yy = Math.min(H - 1, Math.max(0, sy0 + j))
-            v += src[(yy * W + xx) * 4 + c] * (i ? fx : 1 - fx) * (j ? fy : 1 - fy)
-          }
-        d[o + c] = v
-      }
-    }
-  return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
 }
 
 /** 복제 도장: 덮임만큼 원본(오프셋 위치)을 칠한다 */
@@ -410,9 +305,11 @@ function finish(label: string): void {
   session = null
   if (!s) return
   const l = getLayer(s.base, s.layerId)!
-  const bitmap: Bitmap = { width: s.live.width, height: s.live.height, data: s.live.data.slice() }
-  const doc = updateLayer(s.base, s.layerId, s.target === 'mask' ? { mask: { ...l.mask!, bitmap } } : { bitmap })
-  editor.set({ preview: null })
+  // 세션이 끝나므로 살아 있던 사본을 그대로 확정한다 (큰 레이어를 한 번 더 복사하지 않음 — 텍스처도 그대로 쓰인다)
+  const bitmap: Bitmap = s.live
+  if (s.target === 'layer' && l.lock?.alpha) for (let i = 3; i < bitmap.data.length; i += 4) bitmap.data[i] = s.orig[i] // 스팟 복구 등 upload 를 거치지 않은 경로까지
+  const doc = updateLayer(s.base, s.layerId, s.target === 'mask' ? { mask: { ...l.mask!, bitmap } } : { bitmap, shape: undefined })
+  editor.setPreview(null)
   editor.commit(doc, label)
   lastPoint = { p: s.last ?? { x: 0, y: 0 }, layerId: s.layerId }
 }
@@ -490,7 +387,8 @@ function brushLike(kind: Kind): ToolHandler {
         let a = prev
         for (let i = 1; i <= n; i++) {
           const b = { x: prev.x + ((cur.x - prev.x) * i) / n, y: prev.y + ((cur.y - prev.y) * i) / n }
-          const rr = mode === 'blur' ? blurDab(s, b.x, b.y) : mode === 'smudge' ? smudgeDab(s, a, b) : pushDab(s, a, b)
+          const rs = { live: s.live, stroke: s.stroke, limit: limitFn(s) }
+          const rr = nativeRetouch(rs, mode, a, b) ?? (mode === 'blur' ? blurDab(rs, b.x, b.y) : mode === 'smudge' ? smudgeDab(rs, a, b) : pushDab(rs, a, b))
           if (rr) r = r ? { x: Math.min(r.x, rr.x), y: Math.min(r.y, rr.y), w: Math.max(r.x + r.w, rr.x + rr.w) - Math.min(r.x, rr.x), h: Math.max(r.y + r.h, rr.y + rr.h) - Math.min(r.y, rr.y) } : rr
           a = b
         }
@@ -523,7 +421,7 @@ function brushLike(kind: Kind): ToolHandler {
     cancel(c) {
       if (session) {
         session = null
-        editor.set({ preview: null })
+        editor.setPreview(null)
         c.redraw()
       }
     },

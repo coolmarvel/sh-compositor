@@ -40,6 +40,12 @@ try {
   await page.mouse.move(r.x + r.width * 0.75, r.y + r.height * 0.45, { steps: 5 })
   await page.mouse.up()
   await page.waitForTimeout(300)
+  await page.evaluate(() => {
+    const e = window.__sc.editor
+    const d = e.doc
+    e.commit({ ...d, guides: { v: [d.width / 2], h: [d.height / 3] } }, 'g')
+  })
+  await page.waitForTimeout(300)
   await page.screenshot({ path: path.join(dir, 'shot-main.png') })
   await page.keyboard.press('Control+l')
   await page.waitForTimeout(600)

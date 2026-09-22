@@ -16,3 +16,12 @@ export function registerCommands(cmds: Partial<Record<CanvasCommand, () => void>
 export function runCommand(name: CanvasCommand): void {
   registry.get(name)?.()
 }
+
+/** 캔버스(렌더러)에서 문서 축소본을 받는 창구 — 내비게이터가 쓴다 */
+let thumbFn: ((maxSide: number) => ImageData | null) | null = null
+export function registerThumbnail(fn: ((maxSide: number) => ImageData | null) | null): void {
+  thumbFn = fn
+}
+export function docThumbnail(maxSide: number): ImageData | null {
+  return thumbFn?.(maxSide) ?? null
+}

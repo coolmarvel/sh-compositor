@@ -95,6 +95,29 @@ void main() {
   outColor = vec4(co, ao);
 }`
 
+/**
+ * 표준(normal) 혼합 전용 — 하드웨어 블렌딩(ONE, ONE_MINUS_SRC_ALPHA)으로 대상에 바로 겹친다.
+ * 배경을 읽지 않으므로 레이어마다 화면 전체를 복사하던 비용이 사라진다 (대부분의 레이어가 이 경로).
+ */
+export const OVER_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform sampler2D uLayer;
+uniform sampler2D uMask;
+uniform sampler2D uClip;
+uniform bool uHasMask;
+uniform bool uHasClip;
+uniform float uOpacity;
+uniform vec2 uTarget;
+out vec4 outColor;
+void main() {
+  if (vUV.x < 0.0 || vUV.y < 0.0 || vUV.x > 1.0 || vUV.y > 1.0) discard;
+  float k = uOpacity;
+  if (uHasMask) k *= texture(uMask, vUV).r;
+  if (uHasClip) k *= texture(uClip, gl_FragCoord.xy / uTarget).a;
+  outColor = texture(uLayer, vUV) * k; // 프리멀티 그대로 × 덮임
+}`
+
 /** 텍스처 복사 (프리멀티 그대로) — 폴더 결과를 레이어처럼 쓰기 전 등 */
 export const COPY_FS = `#version 300 es
 precision highp float;

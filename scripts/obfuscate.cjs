@@ -21,7 +21,7 @@ const JavaScriptObfuscator = require('javascript-obfuscator')
 const out = (...seg) => path.join(__dirname, '..', 'out', ...seg)
 const assetsDir = out('renderer', 'assets')
 
-const SKIP = /^bgremove-|^ort\.|^heic2any-|^UTIF-|^fflate/
+const SKIP = /^bgremove|^samWorker|^ort\.|^heic2any-|^UTIF-|^fflate/
 
 const targets = [
   out('main', 'index.js'),

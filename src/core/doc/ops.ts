@@ -2,7 +2,7 @@
  * 문서 조작 (순수 TS) — 전부 새 Doc 을 돌려준다(불변). Compositor `EditorSession` 의 레이어·캔버스 명령들.
  * 레이어 배열은 아래 → 위이고, 같은 부모끼리의 상대 순서만 의미가 있다(폴더 = parentId).
  */
-import { newId, type Bitmap, type Doc, type Layer, type LayerKind, type AdjustmentKind, type BlendMode, type LayerTransform } from './types'
+import { newId, type Bitmap, type Doc, type Layer, type LayerKind, type AdjustmentKind, type BlendMode, type LayerTransform, type LayerMask, type Guides } from './types'
 import { createBitmap, cropBitmap, opaqueBounds, grayBitmap } from './bitmap'
 import { identityTransform, transformBounds } from './transform'
 import { flattenLayers, flattenDoc } from './render'
@@ -289,13 +289,58 @@ function shiftLayers(layers: Layer[], dx: number, dy: number): Layer[] {
   return layers.map((l) => ({ ...l, transform: { ...l.transform, x: l.transform.x + dx, y: l.transform.y + dy } }))
 }
 
+/**
+ * 문서 크기 마스크(폴더·조정 레이어)를 새 캔버스로 옮긴다 — 옛 마스크를 (dx, dy) 에 두고 나머지는 흰색(보임).
+ * (2026-09-21: 캔버스 크기는 마스크를 흰색으로 지워 버렸고, 자르기는 옛 크기 그대로 남아 늘어나 보였다)
+ */
+function reframeMask(mask: LayerMask | null, width: number, height: number, dx: number, dy: number): LayerMask | null {
+  if (!mask) return null
+  const out = grayBitmap(width, height, 255)
+  const src = mask.bitmap
+  for (let y = 0; y < src.height; y++) {
+    const ty = y + dy
+    if (ty < 0 || ty >= height) continue
+    for (let x = 0; x < src.width; x++) {
+      const tx = x + dx
+      if (tx < 0 || tx >= width) continue
+      const o = (ty * width + tx) * 4
+      const i = (y * src.width + x) * 4
+      out.data[o] = out.data[o + 1] = out.data[o + 2] = src.data[i]
+    }
+  }
+  return { ...mask, bitmap: out }
+}
+
+/** 안내선 옮기기 (문서 밖으로 나간 것은 버림) */
+function mapGuides(g: Guides | undefined, fx: (x: number) => number, fy: (y: number) => number, w: number, h: number, swap = false): Guides | undefined {
+  if (!g) return g
+  const v = (swap ? g.h.map(fy) : g.v.map(fx)).filter((x) => x >= 0 && x <= w)
+  const hh = (swap ? g.v.map(fx) : g.h.map(fy)).filter((y) => y >= 0 && y <= h)
+  return { v, h: hh }
+}
+
 /** 캔버스 크기 — 픽셀은 그대로, 종이만 (Compositor CanvasResizer). 조정 레이어·폴더는 새 크기로 */
 export function resizeCanvas(doc: Doc, width: number, height: number, anchor: Anchor): Doc {
   const { dx, dy } = anchorOffset(doc.width, doc.height, width, height, anchor)
+  const W = Math.round(width)
+  const H = Math.round(height)
   const layers = shiftLayers(doc.layers, dx, dy).map((l) =>
-    l.kind === 'group' || l.kind === 'adjustment' ? { ...l, transform: identityTransform(width, height), mask: l.mask ? { ...l.mask, bitmap: grayBitmap(width, height, 255) } : null } : l
+    l.kind === 'group' || l.kind === 'adjustment' ? { ...l, transform: identityTransform(W, H), mask: reframeMask(l.mask, W, H, Math.round(dx), Math.round(dy)) } : l
   )
-  return { ...doc, width: Math.round(width), height: Math.round(height), layers, selection: null }
+  return {
+    ...doc,
+    width: W,
+    height: H,
+    layers,
+    selection: null,
+    guides: mapGuides(
+      doc.guides,
+      (x) => x + dx,
+      (y) => y + dy,
+      W,
+      H
+    )
+  }
 }
 
 /** 이미지 크기 — 변형을 비율대로 (비파괴: 비트맵은 원본 해상도 유지 — Compositor 도 변형을 유지한다) */
@@ -306,7 +351,21 @@ export function resizeImage(doc: Doc, width: number, height: number, resolution 
     ...l,
     transform: { ...l.transform, x: l.transform.x * sx, y: l.transform.y * sy, width: l.transform.width * sx, height: l.transform.height * sy }
   }))
-  return { ...doc, width: Math.round(width), height: Math.round(height), resolution, layers, selection: null }
+  return {
+    ...doc,
+    width: Math.round(width),
+    height: Math.round(height),
+    resolution,
+    layers,
+    selection: null,
+    guides: mapGuides(
+      doc.guides,
+      (x) => x * sx,
+      (y) => y * sy,
+      Math.round(width),
+      Math.round(height)
+    )
+  }
 }
 
 /** 자르기 — 사각형을 새 문서 영역으로 (레이어 픽셀은 그대로, 위치만 옮김) */
@@ -315,8 +374,21 @@ export function cropDoc(doc: Doc, rect: { x: number; y: number; w: number; h: nu
   const y = Math.round(rect.y)
   const w = Math.max(1, Math.round(rect.w))
   const h = Math.max(1, Math.round(rect.h))
-  const layers = shiftLayers(doc.layers, -x, -y).map((l) => (l.kind === 'group' || l.kind === 'adjustment' ? { ...l, transform: identityTransform(w, h) } : l))
-  return { ...doc, width: w, height: h, layers, selection: null }
+  const layers = shiftLayers(doc.layers, -x, -y).map((l) => (l.kind === 'group' || l.kind === 'adjustment' ? { ...l, transform: identityTransform(w, h), mask: reframeMask(l.mask, w, h, -x, -y) } : l))
+  return {
+    ...doc,
+    width: w,
+    height: h,
+    layers,
+    selection: null,
+    guides: mapGuides(
+      doc.guides,
+      (gx) => gx - x,
+      (gy) => gy - y,
+      w,
+      h
+    )
+  }
 }
 
 /** 캔버스 반전 — 모든 레이어를 문서 중심 기준으로 */
@@ -327,7 +399,19 @@ export function flipCanvas(doc: Doc, horizontal: boolean): Doc {
     const y = horizontal ? t.y : doc.height - (t.y + t.height)
     return { ...l, transform: { ...t, x, y, rotation: -t.rotation, flipH: horizontal ? !t.flipH : t.flipH, flipV: horizontal ? t.flipV : !t.flipV } }
   })
-  return { ...doc, layers }
+  const W = doc.width
+  const H = doc.height
+  return {
+    ...doc,
+    layers,
+    guides: mapGuides(
+      doc.guides,
+      (gx) => (horizontal ? W - gx : gx),
+      (gy) => (horizontal ? gy : H - gy),
+      W,
+      H
+    )
+  }
 }
 
 /** 캔버스 90° 회전 (시계=1, 반시계=-1) */
@@ -341,10 +425,27 @@ export function rotateCanvas90(doc: Doc, dir: 1 | -1): Doc {
     // 시계: (x,y) → (H − y, x)
     const ncx = dir === 1 ? H - cy : cy
     const ncy = dir === 1 ? cx : W - cx
-    if (l.kind === 'group' || l.kind === 'adjustment') return { ...l, transform: identityTransform(H, W) }
+    if (l.kind === 'group' || l.kind === 'adjustment') return { ...l, transform: identityTransform(H, W), mask: l.mask ? { ...l.mask, bitmap: rotateBitmap90(l.mask.bitmap, dir) } : null }
     return { ...l, transform: { ...t, x: ncx - t.width / 2, y: ncy - t.height / 2, rotation: t.rotation + 90 * dir } }
   })
-  return { ...doc, width: H, height: W, layers, selection: null }
+  // 안내선: 시계 → 세로선 x 는 가로선 y=x, 가로선 y 는 세로선 x=H−y
+  const g = doc.guides
+  const guides = g ? (dir === 1 ? { v: g.h.map((y) => H - y), h: g.v.map((x) => x) } : { v: g.h.map((y) => y), h: g.v.map((x) => W - x) }) : undefined
+  return { ...doc, width: H, height: W, layers, selection: null, guides }
+}
+
+/** 비트맵 90° 회전 (시계=1) */
+function rotateBitmap90(b: Bitmap, dir: 1 | -1): Bitmap {
+  const w = b.width
+  const h = b.height
+  const out = new Uint8ClampedArray(w * h * 4)
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const nx = dir === 1 ? h - 1 - y : y
+      const ny = dir === 1 ? x : w - 1 - x
+      out.set(b.data.subarray((y * w + x) * 4, (y * w + x) * 4 + 4), (ny * h + nx) * 4)
+    }
+  return { width: h, height: w, data: out }
 }
 
 /** 레이어 반전 (변형만 — 비파괴) */

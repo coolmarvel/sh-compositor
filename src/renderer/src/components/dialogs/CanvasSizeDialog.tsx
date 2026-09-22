@@ -61,7 +61,7 @@ export default function CanvasSizeDialog({
       title="캔버스 크기"
       onClose={onClose}
       onEnter={apply}
-      width={420}
+      width={460}
       actions={
         <>
           <Button variant="outlined" onClick={onClose}>
@@ -80,9 +80,11 @@ export default function CanvasSizeDialog({
         {MODES.map((m) => (
           <Box key={m.key} component="label" sx={{ display: 'flex', alignItems: 'center', gap: `${space.sm}px` }}>
             <input type="radio" name="canvas-mode" checked={o.mode === m.key} onChange={() => setMode(m.key)} style={{ margin: 0, accentColor: color.accent }} />
-            <b>{m.label}</b>
+            <Box component="b" sx={{ width: 64, flexShrink: 0 }}>
+              {m.label}
+            </Box>
             <Box component="span" sx={{ color: color.textSecondary }}>
-              — {m.hint}
+              {m.hint}
             </Box>
           </Box>
         ))}
@@ -139,7 +141,7 @@ export default function CanvasSizeDialog({
           [
             { key: 'color', label: '색', hint: '' },
             { key: 'transparent', label: '투명', hint: '여백을 비워 둡니다.' },
-            { key: 'content', label: '내용 인식', hint: '맨 아래 레이어를 주변 그림으로 이어 붙입니다. 큰 이미지는 몇 초 걸립니다.' }
+            { key: 'content', label: '내용 인식', hint: '맨 아래 레이어를 주변 그림으로 이어 붙입니다.' }
           ] as const
         ).map((m) => {
           const current = o.background === null ? 'transparent' : o.background === CONTENT_FILL ? 'content' : 'color'
@@ -152,10 +154,12 @@ export default function CanvasSizeDialog({
                 onChange={() => setO({ ...o, background: m.key === 'transparent' ? null : m.key === 'content' ? CONTENT_FILL : '#ffffff' })}
                 style={{ margin: 0, accentColor: color.accent }}
               />
-              <b>{m.label}</b>
+              <Box component="b" sx={{ width: 56, flexShrink: 0, whiteSpace: 'nowrap' }}>
+                {m.label}
+              </Box>
               {m.key === 'color' && current === 'color' && <PaletteControl title="여백 색" value={o.background!} onChange={(c) => setO({ ...o, background: c })} />}
               {m.hint && (
-                <Box component="span" sx={{ fontSize: 11, color: color.textSecondary }}>
+                <Box component="span" sx={{ fontSize: 11, color: color.textSecondary, whiteSpace: 'nowrap' }}>
                   {m.hint}
                 </Box>
               )}

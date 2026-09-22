@@ -352,9 +352,9 @@ export default function AdjustDialog({
             <Box sx={{ display: 'flex', gap: `${space.lg}px` }}>
               <CurveEditor points={curvePts} onChange={setCurve} />
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: `${space.base}px`, fontSize: font.md, color: color.textSecondary }}>
-                <Box>클릭 = 점 추가 · 드래그 = 이동</Box>
-                <Box>더블클릭 = 점 삭제</Box>
-                <Box>가로 = 입력, 세로 = 출력</Box>
+                <Box>클릭하면 점을 더하고 끌면 옮깁니다.</Box>
+                <Box>점을 더블클릭하면 지웁니다.</Box>
+                <Box>가로축은 원래 밝기, 세로축은 바뀐 밝기입니다.</Box>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: `${space.sm}px`, mt: `${space.base}px` }}>
                   <Button
                     variant="outlined"
@@ -391,7 +391,7 @@ export default function AdjustDialog({
         )}
 
         {tab === 'exposure' && (
-          <GroupBox title="노출 (선형광에서 계산)">
+          <GroupBox title="노출">
             <SliderRow label="노출" value={a.exposure} min={-5} max={5} step={0.05} unit="EV" onChange={(exposure) => set({ exposure })} />
             <SliderRow label="오프셋" value={a.offset} min={-0.5} max={0.5} step={0.005} onChange={(offset) => set({ offset })} />
             <SliderRow label="감마" value={a.gamma} min={0.1} max={3} step={0.01} onChange={(gamma) => set({ gamma })} />
@@ -430,7 +430,7 @@ export default function AdjustDialog({
               <SliderRow label="채도" value={rangeAdj.saturation} min={a.colorize ? 0 : -100} max={100} onChange={(saturation) => setRangeAdj({ saturation })} />
               <SliderRow label="밝기" value={rangeAdj.lightness} min={-100} max={100} onChange={(lightness) => setRangeAdj({ lightness })} />
             </GroupBox>
-            <Box sx={{ fontSize: font.xs, color: color.textSecondary }}>색 범위는 Photoshop 기본 밴드(예: 빨강 = 345°~15°, 양쪽 30° 감쇠)를 씁니다.</Box>
+            <Box sx={{ fontSize: font.xs, color: color.textSecondary }}>색 범위는 포토샵과 같습니다. 예를 들어 빨강은 345°~15°이고 양쪽 30°에 걸쳐 약해집니다.</Box>
           </>
         )}
 
@@ -444,7 +444,7 @@ export default function AdjustDialog({
             </GroupBox>
             <GroupBox title="그라데이션 맵">
               <Check
-                label="사용 — 밝기에 따라 두 색 사이로 칠하기"
+                label="사용 (밝기에 따라 두 색 사이로 칠하기)"
                 checked={!!a.gradientMap}
                 onChange={(on) => set({ gradientMap: on ? { shadows: '#000000', highlights: '#ffffff', reversed: false } : null })}
               />

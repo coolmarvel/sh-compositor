@@ -24,12 +24,23 @@ export interface Filters {
   noiseMono: boolean
   /** 렌즈 보정 −100~100 (양수 = 술통형 왜곡 펴기) */
   lens: number
+  // ── v1.1 추가 (포토샵 Filter 메뉴) — 없으면 끔 ──
+  /** 언샤프 마스크: 양 %(0~500) · 반경 px · 한계값(0~255, 이보다 작은 차이는 건드리지 않음) */
+  sharpenAmount?: number
+  sharpenRadius?: number
+  sharpenThreshold?: number
+  /** 하이 패스 반경 px (0 = 끔) — 윤곽만 남기고 회색으로 */
+  highPass?: number
+  /** 모자이크 칸 크기 px (0·1 = 끔) */
+  mosaic?: number
+  /** 노이즈 감소(중간값) 반경 px (0 = 끔) */
+  median?: number
 }
 
 export const DEFAULT_FILTERS: Filters = { blur: 0, motionDistance: 0, motionAngle: 0, noise: 0, noiseGaussian: true, noiseMono: false, lens: 0 }
 
 export function hasFilters(f: Filters | null | undefined): f is Filters {
-  return !!f && (f.blur > 0 || f.motionDistance > 0 || f.noise > 0 || f.lens !== 0)
+  return !!f && (f.blur > 0 || f.motionDistance > 0 || f.noise > 0 || f.lens !== 0 || (f.sharpenAmount ?? 0) > 0 || (f.highPass ?? 0) > 0 || (f.mosaic ?? 0) > 1 || (f.median ?? 0) > 0)
 }
 
 /** 흐림이 바깥으로 번질 여유(px) — Compositor `blurMargin` (투명 배경 이미지를 넓혀서 흐릴 때) */
@@ -39,7 +50,15 @@ export function filterMargin(f: Filters): number {
 
 /** px 단위 값을 배율 s 로 (미리보기는 축소본에서 돌리므로) */
 export function scaleFilters(f: Filters, s: number): Filters {
-  return { ...f, blur: f.blur * s, motionDistance: f.motionDistance * s }
+  return {
+    ...f,
+    blur: f.blur * s,
+    motionDistance: f.motionDistance * s,
+    sharpenRadius: (f.sharpenRadius ?? 1) * s,
+    highPass: (f.highPass ?? 0) * s,
+    mosaic: (f.mosaic ?? 0) * s,
+    median: Math.round((f.median ?? 0) * s)
+  }
 }
 
 /**
@@ -50,6 +69,7 @@ export function scaleFilters(f: Filters, s: number): Filters {
 export function applyFilters(rgba: Uint8ClampedArray, width: number, height: number, f: Filters, seed = 0x9e3779b9, edges: 'clamp' | 'transparent' = 'transparent'): Uint8ClampedArray {
   let out = rgba
   if (f.lens) out = lensDistort(out, width, height, (Math.max(-100, Math.min(100, f.lens)) / 100) * 0.35)
+  if ((f.median ?? 0) > 0) out = medianFilter(out, width, height, Math.min(10, Math.round(f.median!)))
   if (f.blur > 0 || f.motionDistance > 0) {
     const m = edges === 'clamp' ? filterMargin(f) : 0
     let work = m ? padEdges(out, width, height, m) : out
@@ -59,6 +79,9 @@ export function applyFilters(rgba: Uint8ClampedArray, width: number, height: num
     if (f.motionDistance > 0) work = motionBlur(work, W, H, f.motionDistance, f.motionAngle)
     out = m ? cropPad(work, W, width, height, m) : work
   }
+  if ((f.mosaic ?? 0) > 1) out = mosaicFilter(out, width, height, Math.round(f.mosaic!))
+  if ((f.sharpenAmount ?? 0) > 0) out = unsharpMask(out, width, height, f.sharpenAmount!, f.sharpenRadius ?? 1, f.sharpenThreshold ?? 0)
+  if ((f.highPass ?? 0) > 0) out = highPassFilter(out, width, height, f.highPass!)
   if (f.noise > 0) {
     if (out === rgba) out = rgba.slice()
     addNoise(out, width, height, f.noise, f.noiseGaussian, f.noiseMono, seed)
@@ -270,4 +293,107 @@ export function addNoise(rgba: Uint8ClampedArray, width: number, height: number,
       }
     }
   }
+}
+
+// ── v1.1 추가 필터 ────────────────────────────────────────────────────────
+
+/** 언샤프 마스크 — 원본 + 양·(원본 − 흐림), 차이가 한계값보다 작으면 그대로 (포토샵 Unsharp Mask) */
+export function unsharpMask(src: Uint8ClampedArray, w: number, h: number, amount: number, radius: number, thresh: number): Uint8ClampedArray {
+  const blur = gaussianBlur(src, w, h, Math.max(0.3, radius))
+  const k = amount / 100
+  const out = src.slice()
+  for (let i = 0; i < src.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      const d = src[i + c] - blur[i + c]
+      if (Math.abs(d) * 2 < thresh) continue
+      out[i + c] = src[i + c] + d * k
+    }
+  }
+  return out
+}
+
+/** 하이 패스 — 128 + (원본 − 흐림): 큰 명암은 지우고 윤곽만 (선명하게 할 때 오버레이로 겹쳐 쓰는 용도) */
+export function highPassFilter(src: Uint8ClampedArray, w: number, h: number, radius: number): Uint8ClampedArray {
+  const blur = gaussianBlur(src, w, h, Math.max(0.3, radius))
+  const out = src.slice()
+  for (let i = 0; i < src.length; i += 4) for (let c = 0; c < 3; c++) out[i + c] = 128 + (src[i + c] - blur[i + c])
+  return out
+}
+
+/** 모자이크 — 칸마다 평균색 (알파 가중) */
+export function mosaicFilter(src: Uint8ClampedArray, w: number, h: number, cell: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(src.length)
+  for (let by = 0; by < h; by += cell)
+    for (let bx = 0; bx < w; bx += cell) {
+      let r = 0
+      let g = 0
+      let b = 0
+      let a = 0
+      let n = 0
+      const ex = Math.min(w, bx + cell)
+      const ey = Math.min(h, by + cell)
+      for (let y = by; y < ey; y++)
+        for (let x = bx; x < ex; x++) {
+          const i = (y * w + x) * 4
+          const al = src[i + 3]
+          r += src[i] * al
+          g += src[i + 1] * al
+          b += src[i + 2] * al
+          a += al
+          n++
+        }
+      const cr = a ? r / a : 0
+      const cg = a ? g / a : 0
+      const cb = a ? b / a : 0
+      const ca = a / n
+      for (let y = by; y < ey; y++)
+        for (let x = bx; x < ex; x++) {
+          const i = (y * w + x) * 4
+          out[i] = cr
+          out[i + 1] = cg
+          out[i + 2] = cb
+          out[i + 3] = ca
+        }
+    }
+  return out
+}
+
+/**
+ * 노이즈 감소(중간값) — 채널마다 (2r+1)² 창의 중간값. 가로로 미끄러지는 256칸 히스토그램이라 비용이 r 에 비례 (Huang).
+ * 알파는 그대로.
+ */
+export function medianFilter(src: Uint8ClampedArray, w: number, h: number, r: number): Uint8ClampedArray {
+  if (r <= 0) return src
+  const out = src.slice()
+  const hist = new Int32Array(256)
+  const half = ((2 * r + 1) * (2 * r + 1)) >> 1
+  for (let c = 0; c < 3; c++)
+    for (let y = 0; y < h; y++) {
+      hist.fill(0)
+      let count = 0
+      const y0 = Math.max(0, y - r)
+      const y1 = Math.min(h - 1, y + r)
+      const addCol = (x: number, d: number): void => {
+        if (x < 0 || x >= w) return
+        for (let yy = y0; yy <= y1; yy++) {
+          hist[src[(yy * w + x) * 4 + c]] += d
+          count += d
+        }
+      }
+      for (let x = -r; x <= r; x++) addCol(x, 1)
+      for (let x = 0; x < w; x++) {
+        // 중간값: 누적이 절반을 넘는 첫 칸
+        const target = Math.min(half, count >> 1)
+        let acc = 0
+        let v = 0
+        for (; v < 256; v++) {
+          acc += hist[v]
+          if (acc > target) break
+        }
+        out[(y * w + x) * 4 + c] = v
+        addCol(x - r, -1)
+        addCol(x + r + 1, 1)
+      }
+    }
+  return out
 }

@@ -24,7 +24,7 @@
 2. 검증을 통과하기 전에는 커밋 메시지 작성/산출물 전달을 하지 않는다:
    `npm run typecheck && npm test && npm run build` + 화면을 건드렸으면 `node test/e2e/editor.mjs` (Playwright,
    `npm i --no-save playwright` 임시 설치). **검증에 띄운 Electron·Playwright 프로세스는 끝나면 반드시 종료 확인**
-   (`pgrep -af "[s]h-compositor/node_modules/electron"` 이 비어야 함 — 사용자 지시 2026-09-21).
+   (`pgrep -af "[s]h-compositor/node_modules/electron"` 이 비어야 함 — 사용자 지시 2026-09-21). E2E 는 `npm run e2e`(Xvfb, 화면에 안 뜸).
 3. 버전을 판단해 올린다 (아래 "버전 정책").
 4. 산출물 전달: 인스톨러를 굽고 바탕화면에 복사(옛 버전 exe 는 지움) → "vX.Y.Z 설치·테스트 후 스크린샷 달라"고 알린다.
    ```bash
@@ -87,8 +87,10 @@ npm run typecheck    # 타입 검사 (node + web)
 npm test             # src/core 순수 로직 테스트 (node:test)
 npm run build        # electron-vite build + 난독화 (scripts/obfuscate.cjs)
 npm run format       # Prettier (printWidth 200)
-node test/e2e/editor.mjs [A B …]   # 실제 앱 E2E (build 후, SC_E2E=1 로 window.__sc 조회 창구)
-node test/e2e/shots.mjs <dir>      # 화면 검수용 스크린샷
+npm run e2e [-- A B …]  # 실제 앱 E2E 112건 — Xvfb 가상 화면에서 (사용자 화면에 창이 뜨지 않음). build 후
+npm run perf           # 체감 성능 (PERF_SIZE=4000x3000 PERF_LAYERS=5 PERF_PROFILE=1)
+npm run audit -- <dir>  # 모든 대화상자·메뉴·도구 줄 스크린샷 (문구·줄바꿈 검수)
+npm run models       # AI 개체 선택 모델(SlimSAM q8 35MB)·ORT wasm → resources/sam (git 제외, dist:win 이 먼저 부름)
 npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서 Wine)
 ```
 
@@ -100,7 +102,11 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 - **GPU 거울**: `src/renderer/src/gl/GLRenderer.ts`·`shaders.ts` — CPU 합성 규칙을 그대로 따른다 (`docs/guides/rendering.md`)
 - 편집기 상태: `editor/store.ts`(탭·이력·도구 설정·대화상자), 동작: `editor/actions.ts`(메뉴·단축키 공용), 픽셀 편집 규약: `editor/pixels.ts`
   (`docs/guides/pixels.md`), 입출력: `editor/io.ts`, 배경 제거: `editor/bgremove.ts`(동적 import), 캔버스 명령 등록소: `editor/commands.ts`
-- 도구: `tools/{move,select,paint,misc}.ts` + 목록·단축키 `tools/index.ts`
+- 도구: `tools/{move,select,paint,misc}.ts` + 목록·단축키·설명 `tools/index.ts`
+- PSD: `core/doc/psd.ts`(ag-psd, 테스트 `test/psd.test.ts`) · 안내선 `editor/guides.ts`+`components/Rulers.tsx` · 도형 `editor/shape.ts` · 일꾼 `editor/{packWorker,bgremoveWorker,samWorker}.ts`
+- **개체 선택(AI)**: `editor/objectSelect.ts`(임베딩 캐시·프롬프트 변환·후보 고르기·다듬기) + `editor/samWorker.ts`(transformers.js SlimSAM) + `tools/objectSelect.ts`(사각형·올가미·칠하기·클릭)
+- P3 추가: 조정 `core/adjust2.ts`(흑백·색상 균형·활기·포스터화·한계값) · 필터 `core/filters.ts`(언샤프·하이 패스·모자이크·중간값) · 외부 광선 `core/effects.ts` · `panels/HistogramPanel.tsx` · 가장자리 다듬기 `DialogHost RefineEdgeDialog`
+- 패널: `panels/{LayersPanel,HistoryPanel,SwatchesPanel,NavigatorPanel,PanelTabs}.tsx` · 보기 계산 `editor/view.ts` · 커서 `editor/cursor.ts`
 - 화면: `App.tsx`(셸·메뉴·단축키) · `components/{CanvasView,ToolRail,ToolHeader,TabStrip,DialogHost}.tsx` · `components/panels/*` · `components/dialogs/*` · `components/chrome/*`
 - 디자인 토큰: `styles/tokens.ts`(SSOT) + `skins.ts`(13종) + `theme.ts`(MUI 재스킨) — 계약은 루트 `DESIGN.md`
 
@@ -110,7 +116,16 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 함정 (재발 방지):
 - 배경 제거 = 두 버전 공존: 내장 `@imgly/background-removal` **1.4.5 고정**(`^` 금지 — 1.7 은 `isnet_fp16` 을 찾아 오프라인 데이터 1.4.5 와 안 맞음, 2026-09-21 H1 사고)
   + 온라인 `@imgly/background-removal-online`(npm 별칭 = 1.7.0, CDN). 두 라이브러리·onnxruntime 은 vite `manualChunks` 로 `bgremove-*` 청크 → 난독화 제외.
+- 개체 선택 모델(SlimSAM ONNX)에는 **상자 입력이 없다** — 상자·올가미는 양성 점 1개(영역 안쪽 깊은 곳) + 영역 바로 밖 음성 점 8개로 바꿔 넣는다(라벨 2/3 상자 흉내는 뒤집힌 마스크).
+  후보 3개 중 고르기: 양성 점을 덮고 음성 점을 피하는 후보만 → 영역이 있으면 영역 안 85% 이상·확신도 0.2 이내에서 가장 큰 것, 점만 있으면 화면 절반 넘는 후보 빼고 확신도 최고 (`decodeAndPick`).
+  모델·ORT wasm 은 CDN 이 아니라 `aimodel://assets/`(main `serveDir`, CSP `aimodel:`) — `resources/sam` 이 없으면 `npm run models`.
+- 설치본에 node_modules 를 싣지 않는다(`build.files` `!node_modules/**/*`, v1.0.2 에서 설치 폴더 약 1.2GB → 597MB). main·preload 는 Node 기본 모듈만 import 할 것.
 - `npm i`(다른 패키지 설치)를 하면 `--no-save playwright` 가 지워진다 → E2E 전에 다시 설치.
+- 미리보기는 반드시 `editor.setPreview()`(만든 문서에 묶임) — `set({preview})` 로 넣으면 문서가 바뀐 뒤에도 옛 미리보기가 그려진다 (배경 제거 미반영 사고).
+- 오래 도는 계산(ONNX·PNG 압축)은 Web Worker — 화면 스레드에서 돌리면 진행 막대까지 멈춘다. 워커는 동적 import 를 쓰면 vite `worker.format: 'es'` 필요.
+- 캔버스 포커스는 `focus({ preventScroll: true })` — 아니면 화면 전체가 스크롤돼 클릭 위치가 어긋난다.
+- UI 문구: "—"·"A = B" 금지, 한 문장 한 줄(대화상자 폭 맞춤), 바꾸면 `npm run audit` 으로 확인.
+- E2E·perf 는 `npm run e2e` (Xvfb) — 사용자 화면에서 창이 깜빡이지 않게.
 - 보기 맞춤은 `editor/view.ts` + `store.withView`(문서 크기 변화 시 동기) — rAF 그리기에만 의존하면 창이 뒤에 있을 때 클릭 좌표가 어긋난다.
 - `GLRenderer.setDoc` 은 문서가 같으면 재합성하지 않는다 — 인자를 늘릴 때 "매번 새 값"을 넘기면 매 프레임 재합성된다 (2026-09-21 사고).
 - 픽셀 편집 전에 반드시 `bakeLayer`(문서 정렬) — 변형된 레이어에 좌표를 그대로 쓰면 어긋난다.
@@ -136,3 +151,18 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 | Commands (`.claude/commands/`) | `/review-security` · `/deploy-check` |
 | MCP (`.mcp.json`) | `context7`(라이브러리 문서) · `playwright`(브라우저 QA — 실제 앱 QA 는 `test/e2e/*.mjs` 의 `_electron`) |
 | Skills | 스택별 스킬 도입 시 skills-lock.json + scripts/install-skills.sh 방식으로 락 (현재 없음) |
+
+## 리터칭 가속 (v1.0.3)
+
+- `native/retouch/kernel.rs` → `npm run build:retouch` → `src/renderer/src/assets/retouch.wasm` (소스와 함께 보관).
+- `core/retouchWasm.ts` 영역 전달·재사용 메모리, `core/retouch.ts` TS 기준/폴백. ADR-0003 참조.
+- 커널 수정 시 WASM 재생성 후 `test/retouch.test.ts` 차등 비교 및 E2E F5 확인. 전체 이미지 복사를 자국 루프에 다시 넣지 않는다.
+
+## 실행 경로 검수 (v1.0.4)
+
+- 검수 결과·웹 전환 경계: `docs/guides/code-review.md`. 비동기 작업 소유권: `docs/adr/0004-background-lifecycle.md`.
+- 저장 완료는 `markSaved(tabId, snapshot, path, name)`으로 요청 당시 탭·문서에 반영한다. 현재 활성 탭을 저장한 것으로 표시하지 않는다.
+- Worker 요청은 `util/workerClient.ts`, 자동 저장의 중복 실행·종료 순서는 `util/recoveryWriter.ts`가 관리한다.
+- preload 이벤트 구독은 해제 함수를 반환한다. React effect에서 등록하면 cleanup에서 반드시 해제한다.
+- 파일 저장은 `main/files.ts writeAtomic`을 사용한다. 기존 파일을 먼저 삭제하지 않는다.
+- 타입 검사에 미사용 지역 변수·매개변수 검사 포함. 성능 비교: `node --import tsx test/review-bench.ts`.

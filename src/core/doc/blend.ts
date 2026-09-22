@@ -105,12 +105,28 @@ export function blendColor(mode: BlendMode, cb: [number, number, number], cs: [n
  *   co  = αs·Cs' + (1 − αs)·αb·Cb   (프리멀티플라이드)
  *   αo  = αs + αb·(1 − αs)
  */
-export function compositePixel(mode: BlendMode, cb: [number, number, number], ab: number, cs: [number, number, number], as: number): [number, number, number, number] {
-  if (as <= 0) return [cb[0], cb[1], cb[2], ab]
+export function compositePixel(
+  mode: BlendMode,
+  cb: [number, number, number],
+  ab: number,
+  cs: [number, number, number],
+  as: number,
+  out: [number, number, number, number] = [0, 0, 0, 0]
+): [number, number, number, number] {
+  if (as <= 0) {
+    out[0] = cb[0]
+    out[1] = cb[1]
+    out[2] = cb[2]
+    out[3] = ab
+    return out
+  }
   const B = mode === 'normal' ? cs : blendColor(mode, cb, cs)
   const ao = as + ab * (1 - as)
-  if (ao <= 0) return [0, 0, 0, 0]
-  const out: [number, number, number, number] = [0, 0, 0, ao]
+  if (ao <= 0) {
+    out.fill(0)
+    return out
+  }
+  out[3] = ao
   for (let i = 0; i < 3; i++) {
     const mixed = (1 - ab) * cs[i] + ab * B[i]
     out[i] = (as * mixed + (1 - as) * ab * cb[i]) / ao

@@ -3,7 +3,7 @@
  * React 밖의 평범한 함수: 현재 문서를 읽고 `editor.commit` 으로 한 칸씩 이력에 남긴다.
  */
 import { editor } from './store'
-import { bakeLayer, editPixels, fillSelection, eraseSelection, adjustLayer, layerViaCopy, selWeight } from './pixels'
+import { bakeLayer, editPixels, fillSelection, eraseSelection, adjustLayer, layerViaCopy, selWeight, pixelsLocked } from './pixels'
 import { copyToClipboard, mergedBitmap } from './io'
 import {
   getLayer,
@@ -37,6 +37,9 @@ import {
   autoLevelsFor,
   contentFill,
   gaussianBlur,
+  transformBounds,
+  selectionStrokeCoverage,
+  smoothSelection,
   isEffectivelyVisible,
   DEFAULT_ADJUST,
   ADJUSTMENT_KINDS,
@@ -70,9 +73,10 @@ function pixelLayer(d: Doc, what = '이 작업'): Layer | null {
     return null
   }
   if (!l.visible) {
-    editor.toast('info', '숨긴 레이어입니다 — 눈을 켜고 다시 하세요.')
+    editor.toast('info', '숨긴 레이어입니다. 눈 아이콘을 켜고 다시 해 주세요.')
     return null
   }
+  if (pixelsLocked(l, (m) => editor.toast('info', m))) return null
   return l
 }
 
@@ -95,6 +99,43 @@ export function modifySelection(op: 'expand' | 'contract' | 'feather', px: numbe
   const sel = op === 'feather' ? featherSelection(d.selection, px) : growSelection(d.selection, op === 'expand' ? px : -px)
   editor.commit({ ...d, selection: sel }, op === 'expand' ? '선택 확장' : op === 'contract' ? '선택 축소' : '선택 페더')
 }
+/** 선택 ▸ 수정 ▸ 매끄럽게 */
+export function smoothSel(px: number): void {
+  const d = doc()
+  if (!d?.selection || px <= 0) return
+  editor.commit({ ...d, selection: smoothSelection(d.selection, px) }, '선택 매끄럽게')
+}
+
+/** 편집 ▸ 선 그리기 — 선택 테두리를 따라 색으로 칠한다 (활성 픽셀 레이어에) */
+export function strokeSelection(o: { width: number; color: [number, number, number]; position: 'inside' | 'center' | 'outside'; opacity: number }): void {
+  const d = doc()
+  if (!d?.selection?.bounds) return editor.toast('info', '선을 그릴 영역을 먼저 선택하세요.')
+  const l = pixelLayer(d, '선 그리기')
+  if (!l) return
+  const cov = selectionStrokeCoverage(d.selection, o.width, o.position)
+  const b = d.selection.bounds
+  const m = Math.ceil(o.width) + 2
+  // 선이 선택 밖으로도 나가므로 선택 제한 없이 칠하고, 선택은 그대로 돌려놓는다
+  const out = editPixels({ ...d, selection: null }, l.id, 'layer', { x: b.x - m, y: b.y - m, w: b.w + 2 * m, h: b.h + 2 * m }, (px, w, h, ox, oy) => {
+    for (let y = 0; y < h; y++) {
+      const dy = y + oy
+      if (dy < 0 || dy >= d.height) continue
+      for (let x = 0; x < w; x++) {
+        const dx = x + ox
+        if (dx < 0 || dx >= d.width) continue
+        const a = cov[dy * d.width + dx] * o.opacity
+        if (a <= 0) continue
+        const i = (y * w + x) * 4
+        const da = px[i + 3] / 255
+        const oa = a + da * (1 - a)
+        for (let c = 0; c < 3; c++) px[i + c] = (o.color[c] * a + px[i + c] * da * (1 - a)) / oa
+        px[i + 3] = oa * 255
+      }
+    }
+  })
+  editor.commit({ ...out, selection: d.selection }, '선 그리기')
+}
+
 /** 레이어 픽셀(알파)로 선택 — 레이어 썸네일 Ctrl+클릭 */
 export function selectLayerPixels(id: string): void {
   const d = doc()
@@ -132,7 +173,7 @@ export function clearPixels(): void {
   if (ml) return editor.commit(fillSelection(d, ml.id, [0, 0, 0], 'mask'), '마스크 가리기')
   const l = pixelLayer(d, '지우기')
   if (!l) return
-  if (!d.selection) return editor.toast('info', '지울 영역을 먼저 선택하세요. (레이어 전체는 레이어 → 삭제)')
+  if (!d.selection) return editor.toast('info', '지울 영역을 먼저 선택하세요. 레이어를 통째로 지우려면 레이어 메뉴의 레이어 삭제를 쓰세요.')
   editor.commit(eraseSelection(d, l.id), '픽셀 지우기')
 }
 export function fill(which: 'fg' | 'bg'): void {
@@ -249,7 +290,7 @@ export async function removeBackground(refine: MatteRefine | null, opts: BgOptio
     const baked = bakeLayer(d, l.id)
     const b = getLayer(baked, l.id)!
     const { subjectMask } = await import('./bgremove')
-    const mask = await subjectMask(b.bitmap!, refine, opts, (label) => editor.set({ progress: { label } }))
+    const mask = await subjectMask(b.bitmap!, refine, opts, (label, value) => editor.set({ progress: { label, value } }))
     const data = new Uint8ClampedArray(mask.length * 4)
     const old = b.mask?.bitmap.data
     for (let i = 0; i < mask.length; i++) {
@@ -301,6 +342,42 @@ export async function applyCanvasSize(o: CanvasSizeOptions): Promise<void> {
     else run()
   }
   editor.commit(next, '캔버스 크기')
+}
+
+/** 배경 제거 대화상자에서 고른 엔진 방식 (자동·내장·최신) → 이번에 쓸 엔진. 최신 전용인데 연결이 없으면 null */
+async function pickEngine(): Promise<'offline' | 'online' | null> {
+  let mode = 'auto'
+  try {
+    mode = localStorage.getItem('sc.bgMode') ?? 'auto'
+  } catch {
+    /* 무시 */
+  }
+  if (mode === 'offline') return 'offline'
+  const { checkOnline } = await import('./bgremove')
+  if (await checkOnline()) return 'online'
+  if (mode === 'online') {
+    editor.toast('info', '인터넷에 연결되어 있지 않아 최신 모델을 쓸 수 없습니다. 필터 ▸ 배경 제거에서 내장 모델을 고르세요.')
+    return null
+  }
+  return 'offline'
+}
+
+/** 선택 ▸ 피사체 — 보이는 그림에서 AI 로 주인공을 찾아 선택 영역으로 (포토샵 Select Subject) */
+export async function selectSubject(): Promise<void> {
+  const d = doc()
+  if (!d) return
+  const engine = await pickEngine()
+  if (!engine) return
+  await editor.busy('피사체 찾는 중…', async () => {
+    const flat = mergedBitmap(d)
+    const { subjectMask } = await import('./bgremove')
+    const mask = await subjectMask(flat, { refine: 8, shift: 0, contrast: 30 }, { engine }, (label, value) => editor.set({ progress: { label, value } }))
+    const sel = makeSelection(d.width, d.height, mask)
+    const cur = editor.doc
+    if (!cur) return
+    if (!sel?.bounds) return editor.toast('info', '피사체를 찾지 못했습니다.')
+    editor.commit({ ...cur, selection: sel }, '피사체 선택')
+  })
 }
 
 // ── 레이어 ──
@@ -442,11 +519,12 @@ export function featherMask(radius: number): void {
   )
 }
 
-/** 문자 레이어 → 픽셀 레이어 */
+/** 문자·도형 레이어 → 일반 픽셀 레이어 (래스터화) */
 export function rasterizeText(): void {
   const d = doc()
   const l = d && getLayer(d, d.activeId)
   if (d && l?.kind === 'text') editor.commit(updateLayer(d, l.id, { kind: 'pixel', text: null }), '문자 래스터화')
+  else if (d && l?.shape) editor.commit(updateLayer(d, l.id, { shape: undefined }), '도형 래스터화')
 }
 
 // ── 파일·탭 ──
@@ -471,4 +549,113 @@ export async function importDialog(): Promise<void> {
   const { importAsLayer } = await import('./io')
   const files = await window.api.open('image')
   for (const f of files) await editor.busy(`${f.name} 가져오는 중…`, () => importAsLayer(f.bytes, f.name))
+}
+
+// ── 정렬·분포 (포토샵 이동 도구 옵션) ──
+type Edge = 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom'
+
+/** 움직일 레이어들 (폴더면 자손 픽셀 레이어까지) + 각자의 문서 경계 */
+function alignTargets(d: Doc): { ids: string[]; box: { x: number; y: number; w: number; h: number } }[] {
+  const out: { ids: string[]; box: { x: number; y: number; w: number; h: number } }[] = []
+  for (const id of editor.state.selectedIds) {
+    const l = getLayer(d, id)
+    if (!l || l.kind === 'adjustment' || l.lock?.position) continue
+    const members = l.kind === 'group' ? d.layers.filter((k) => k.bitmap && isDescendant(d, k.id, l.id)) : l.bitmap ? [l] : []
+    if (!members.length) continue
+    const bs = members.map((k) => transformBounds(k.transform))
+    const x0 = Math.min(...bs.map((b) => b.x))
+    const y0 = Math.min(...bs.map((b) => b.y))
+    const x1 = Math.max(...bs.map((b) => b.x + b.w))
+    const y1 = Math.max(...bs.map((b) => b.y + b.h))
+    out.push({ ids: members.map((k) => k.id), box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } })
+  }
+  return out
+}
+function isDescendant(d: Doc, id: string, ancestor: string): boolean {
+  let p = getLayer(d, id)?.parentId ?? null
+  while (p) {
+    if (p === ancestor) return true
+    p = getLayer(d, p)?.parentId ?? null
+  }
+  return false
+}
+function shiftAll(d: Doc, ids: string[], dx: number, dy: number): Doc {
+  let out = d
+  for (const id of ids) {
+    const l = getLayer(out, id)!
+    out = updateLayer(out, id, { transform: { ...l.transform, x: Math.round(l.transform.x + dx), y: Math.round(l.transform.y + dy) } })
+  }
+  return out
+}
+
+/** 정렬 — 기준: 선택 영역 › (레이어 하나면) 캔버스 › 고른 레이어들 전체 경계 */
+export function alignLayers(edge: Edge): void {
+  const d = doc()
+  if (!d) return
+  const ts = alignTargets(d)
+  if (!ts.length) return editor.toast('info', '정렬할 레이어를 고르세요. (Ctrl+클릭으로 여러 장)')
+  const ref =
+    d.selection?.bounds ??
+    (ts.length === 1
+      ? { x: 0, y: 0, w: d.width, h: d.height }
+      : (() => {
+          const x0 = Math.min(...ts.map((t) => t.box.x))
+          const y0 = Math.min(...ts.map((t) => t.box.y))
+          return { x: x0, y: y0, w: Math.max(...ts.map((t) => t.box.x + t.box.w)) - x0, h: Math.max(...ts.map((t) => t.box.y + t.box.h)) - y0 }
+        })())
+  let out = d
+  for (const t of ts) {
+    const b = t.box
+    const dx = edge === 'left' ? ref.x - b.x : edge === 'hcenter' ? ref.x + ref.w / 2 - (b.x + b.w / 2) : edge === 'right' ? ref.x + ref.w - (b.x + b.w) : 0
+    const dy = edge === 'top' ? ref.y - b.y : edge === 'vcenter' ? ref.y + ref.h / 2 - (b.y + b.h / 2) : edge === 'bottom' ? ref.y + ref.h - (b.y + b.h) : 0
+    out = shiftAll(out, t.ids, dx, dy)
+  }
+  editor.commit(out, '정렬')
+}
+
+/** 분포 — 3장 이상을 가운데 간격이 고르게 (양 끝 레이어는 그대로) */
+export function distributeLayers(axis: 'h' | 'v'): void {
+  const d = doc()
+  if (!d) return
+  const ts = alignTargets(d)
+  if (ts.length < 3) return editor.toast('info', '분포는 레이어를 3장 이상 골라야 합니다.')
+  const c = (t: (typeof ts)[number]): number => (axis === 'h' ? t.box.x + t.box.w / 2 : t.box.y + t.box.h / 2)
+  const sorted = [...ts].sort((a, b) => c(a) - c(b))
+  const first = c(sorted[0])
+  const step = (c(sorted[sorted.length - 1]) - first) / (sorted.length - 1)
+  let out = d
+  sorted.forEach((t, i) => {
+    const want = first + step * i
+    out = shiftAll(out, t.ids, axis === 'h' ? want - c(t) : 0, axis === 'v' ? want - c(t) : 0)
+  })
+  editor.commit(out, '분포')
+}
+
+// ── 레이어 스타일 복사·붙여넣기 (포토샵 Copy/Paste Layer Style) ──
+let styleClip: { effects: Layer['effects'] } | null = null
+export const hasStyleClip = (): boolean => !!styleClip
+export function copyLayerStyle(): void {
+  const d = doc()
+  const l = d && getLayer(d, d.activeId)
+  if (!l?.effects) return editor.toast('info', '복사할 레이어 효과가 없습니다.')
+  styleClip = { effects: JSON.parse(JSON.stringify(l.effects)) }
+  editor.toast('ok', `"${l.name}" 의 레이어 효과를 복사했습니다.`)
+  editor.requestRender()
+}
+export function pasteLayerStyle(): void {
+  const d = doc()
+  if (!d || !styleClip) return
+  let out = d
+  for (const id of editor.state.selectedIds) {
+    const l = getLayer(out, id)
+    if (l && (l.kind === 'pixel' || l.kind === 'text')) out = updateLayer(out, id, { effects: JSON.parse(JSON.stringify(styleClip.effects)) })
+  }
+  if (out !== d) editor.commit(out, '레이어 효과 붙여넣기')
+}
+export function clearLayerStyle(): void {
+  const d = doc()
+  if (!d) return
+  let out = d
+  for (const id of editor.state.selectedIds) if (getLayer(out, id)?.effects) out = updateLayer(out, id, { effects: null })
+  if (out !== d) editor.commit(out, '레이어 효과 지우기')
 }

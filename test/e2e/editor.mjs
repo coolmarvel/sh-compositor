@@ -186,8 +186,12 @@ async function click(page, x, y, mods = []) {
   for (const m of mods) await page.keyboard.up(m)
   await page.waitForTimeout(120)
 }
-async function menu(page, top, item) {
+async function menu(page, top, item, sub) {
   await page.getByRole('menubar').getByRole('menuitem', { name: top, exact: true }).click()
+  if (sub) {
+    await page.getByRole('menuitem', { name: sub }).first().hover()
+    await page.waitForTimeout(150)
+  }
   await page.getByRole('menuitem', { name: item }).first().click()
   await page.waitForTimeout(150)
 }
@@ -227,6 +231,32 @@ async function screenPx(page, x, y) {
     g.drawImage(bmp, 0, 0)
     return Array.from(g.getImageData(0, 0, 1, 1).data)
   }, buf.toString('base64'))
+}
+
+/** 화면(GPU) = CPU 합성 — 문서 전체에 흩어진 격자 지점에서 (투명은 체커라 불투명 지점만 비교) */
+async function gpuMatchesCpu(page, tol = 8) {
+  // 도구 오버레이(핸들·테두리·개미 행진)는 비교에서 뺀다
+  await page.evaluate(() => (document.querySelectorAll('[data-testid="canvas"] canvas')[1].style.visibility = 'hidden'))
+  try {
+    await gpuMatchesCpuInner(page, tol)
+  } finally {
+    await page.evaluate(() => (document.querySelectorAll('[data-testid="canvas"] canvas')[1].style.visibility = ''))
+  }
+}
+async function gpuMatchesCpuInner(page, tol) {
+  await page.waitForTimeout(250)
+  const d = await docInfo(page)
+  const bad = []
+  for (const fy of [0.15, 0.5, 0.85])
+    for (const fx of [0.15, 0.5, 0.85]) {
+      const x = Math.floor(d.w * fx)
+      const y = Math.floor(d.h * fy)
+      const c = await px(page, x, y)
+      if (c[3] < 255) continue
+      const g = await screenPx(page, x, y)
+      if (!near(c.slice(0, 3), g.slice(0, 3), tol)) bad.push(`(${x},${y}) cpu ${c} gpu ${g}`)
+    }
+  assert(bad.length === 0, bad.join(' | '))
 }
 
 const groups = {}
@@ -377,6 +407,15 @@ groups.C = async () => {
     const gpu = await screenPx(page, 30, 30)
     assert(near(gpu.slice(0, 3), [128, 0, 0], 6), `gpu ${gpu}`)
   })
+  await t('C2b 방향키로 레이어 이동 뒤 화면 = CPU (영역 합성)', async () => {
+    await press(page, 'v')
+    await page.locator('[data-testid="canvas"]').focus()
+    const before = (await docInfo(page)).undo
+    for (let i = 0; i < 5; i++) await press(page, 'Shift+ArrowRight')
+    await gpuMatchesCpu(page)
+    const n = (await docInfo(page)).undo - before
+    for (let i = 0; i < n; i++) await press(page, 'Control+z')
+  })
   await t('C3 불투명도 50 → 합성 변화', async () => {
     const box = page.getByLabel('불투명도', { exact: true })
     await box.fill('50')
@@ -447,6 +486,17 @@ groups.C = async () => {
     await page.waitForTimeout(150)
     assert(near(await px(page, 30, 30), [128, 128, 128, 255]), 'history jump')
   })
+  await t('C10b 혼합 모드 16종 화면 = CPU', async () => {
+    for (const mode of ['screen', 'overlay', 'difference', 'color', 'luminosity', 'softLight']) {
+      await page.evaluate((m) => {
+        const e = window.__sc.editor
+        const d = e.doc
+        const top = d.layers.filter((l) => l.kind === 'pixel').pop()
+        e.commit({ ...d, layers: d.layers.map((l) => (l.id === top.id ? { ...l, blend: m, opacity: 0.8 } : l)) }, 'test')
+      }, mode)
+      await gpuMatchesCpu(page, 10)
+    }
+  })
   await t('C11 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n')))
   await closeApp(app)
 }
@@ -507,7 +557,7 @@ groups.D = async () => {
     ])
     await press(page, 'Alt+Backspace')
     await press(page, 'Control+d')
-    await menu(page, '레이어(L)', '레이어 효과…')
+    await menu(page, '레이어(L)', '효과 설정…', '레이어 효과')
     await page.getByRole('dialog').getByText('사용').first().click()
     await page.waitForTimeout(150)
     await dialogOk(page)
@@ -515,7 +565,7 @@ groups.D = async () => {
     assert(d.layers[d.layers.length - 1].fx, 'no fx')
   })
   await t('D6 조정 레이어(레벨) 설정 편집', async () => {
-    await menu(page, '레이어(L)', '새 조정 레이어: 레벨')
+    await menu(page, '레이어(L)', '레벨…', '새 조정 레이어')
     await page.getByRole('dialog').getByLabel('검정 값').first().fill('100')
     await page.waitForTimeout(150)
     await dialogOk(page)
@@ -610,6 +660,7 @@ groups.E = async () => {
     })
     assert(Math.abs(x - (x0 - 30)) <= 1, `x ${x0} → ${x}`)
   })
+  await t('E6b 이동 후 화면 = CPU', async () => gpuMatchesCpu(page))
   await t('E7 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n')))
   await closeApp(app)
 }
@@ -631,6 +682,26 @@ groups.F = async () => {
       d.layers.some((l) => l.kind === 'text'),
       JSON.stringify(d.layers)
     )
+  })
+  await t('F1b 문자 입력 직후 이동 도구로 바로 끌기', async () => {
+    await press(page, 't')
+    await click(page, 150, 120)
+    const ta = page.getByTestId('text-editor')
+    await ta.waitFor()
+    await ta.fill('바로 이동')
+    // 레일의 이동 도구 버튼을 누른다 (문자 편집은 blur 로 확정)
+    await page.locator('[data-tool="move"]').click()
+    await page.waitForTimeout(250)
+    const d0 = await docInfo(page)
+    const tl = d0.layers.find((l) => l.kind === 'text' && l.name.startsWith('바로'))
+    assert(tl && d0.active === tl.id, 'text layer not active ' + JSON.stringify(d0.layers.map((l) => l.name)) + ' active ' + d0.active)
+    const x0 = await page.evaluate((id) => window.__sc.editor.doc.layers.find((l) => l.id === id).transform.x, tl.id)
+    await drag(page, [
+      [160, 130],
+      [190, 130]
+    ])
+    const x1 = await page.evaluate((id) => window.__sc.editor.doc.layers.find((l) => l.id === id).transform.x, tl.id)
+    assert(Math.abs(x1 - x0 - 30) <= 2, `moved ${x0} → ${x1}`)
   })
   await t('F2 도형(사각형) → 새 레이어', async () => {
     await press(page, 'u')
@@ -670,6 +741,47 @@ groups.F = async () => {
     ])
     assert((await docInfo(page)).undo === n + 1, 'blur stroke')
   })
+  for (const mode of ['blur', 'smudge', 'liquify'])
+    await t(`F5-${mode} WASM 픽셀 변경·실행취소·다시실행`, async () => {
+      assert(await page.evaluate(() => window.__sc.retouchReady), 'WASM not loaded in built Electron')
+      await page.evaluate(() => {
+        const e = window.__sc.editor,
+          d = e.doc
+        const layer = d.layers.find((l) => l.id === d.activeId)
+        const data = layer.bitmap.data.slice()
+        let seed = 7919
+        for (let i = 0; i < data.length; i += 4) {
+          seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+          data[i] = seed >>> 24
+          data[i + 1] = seed >>> 16
+          data[i + 2] = seed >>> 8
+          data[i + 3] = 255
+        }
+        e.commit({ ...d, layers: d.layers.map((l) => (l === layer ? { ...l, bitmap: { ...l.bitmap, data } } : l)) }, '리터칭 테스트 무늬')
+      })
+      await page.evaluate((mode) => window.__sc.editor.setSettings({ blurMode: mode, blurStrength: 90 }), mode)
+      await press(page, 'r')
+      const pixels = () =>
+        page.evaluate(() => {
+          const e = window.__sc.editor
+          return Array.from(e.doc.layers.find((l) => l.id === e.doc.activeId).bitmap.data)
+        })
+      const before = await pixels()
+      await drag(page, [
+        [100, 80],
+        [130, 95],
+        [160, 85]
+      ])
+      const after = await pixels()
+      assert(
+        after.some((v, i) => v !== before[i]),
+        `${mode} unchanged`
+      )
+      await press(page, 'Control+z')
+      assert(JSON.stringify(await pixels()) === JSON.stringify(before), `${mode} undo differs`)
+      await press(page, 'Control+Shift+z')
+      assert(JSON.stringify(await pixels()) === JSON.stringify(after), `${mode} redo differs`)
+    })
   await t('F6 복제 도장 Alt+클릭 → 획', async () => {
     await press(page, 's')
     await click(page, 20, 20, ['Alt'])
@@ -690,6 +802,7 @@ groups.F = async () => {
     await page.waitForTimeout(400)
     assert((await docInfo(page)).undo === n + 1, 'heal stroke')
   })
+  await t('F7b 칠·도형·그라데이션 후 화면 = CPU', async () => gpuMatchesCpu(page))
   await t('F8 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n')))
   await closeApp(app)
 }
@@ -720,13 +833,13 @@ groups.G = async () => {
     assert(near(await px(page, 10, 10), [10, 200, 10, 255]), 'pixel lost')
   })
   await t('G2 PNG 내보내기', async () => {
-    await menu(page, '파일(F)', 'PNG로 내보내기…')
+    await menu(page, '파일(F)', 'PNG…', '내보내기')
     await page.waitForTimeout(500)
     const f = path.join(OUT, 'stripes.png')
     assert(fs.existsSync(f) && fs.readFileSync(f).readUInt32BE(16) === 60, 'png')
   })
   await t('G3 JPEG 내보내기 (미리보기 → 저장)', async () => {
-    await menu(page, '파일(F)', 'JPEG로 내보내기…')
+    await menu(page, '파일(F)', 'JPEG…', '내보내기')
     const btn = page.getByRole('dialog').getByRole('button', { name: '저장…' })
     await page.waitForFunction(() => !document.querySelector('[role=dialog] button:disabled'), null, { timeout: 5000 }).catch(() => {})
     await page.waitForTimeout(500)
@@ -768,6 +881,16 @@ groups.H = async () => {
   const { app, page, errors } = await launch()
   await openFile(app, page, 'subject.png')
   await t('H1 배경 제거 → 마스크 (배경 가림·피사체 유지)', async () => {
+    // 추론 중에도 화면 스레드가 멈추지 않는지(진행 막대가 움직이는지) 재기 위해 긴 작업·진행 문구를 기록
+    await page.evaluate(() => {
+      window.__lt = []
+      new PerformanceObserver((l) => l.getEntries().forEach((e) => window.__lt.push(e.duration))).observe({ type: 'longtask' })
+      window.__labels = new Set()
+      window.__sc.editor.subscribe(() => {
+        const p = window.__sc.editor.state.progress
+        if (p) window.__labels.add(p.label + (p.value !== undefined ? ' %' : ''))
+      })
+    })
     await menu(page, '필터(T)', '배경 제거 (AI)…')
     await page.getByRole('dialog').getByRole('button', { name: '배경 제거' }).click()
     await page.waitForFunction(() => window.__sc.editor.doc.layers[0].mask || window.__sc.editor.state.toast?.kind === 'err', null, { timeout: 180000 })
@@ -776,6 +899,19 @@ groups.H = async () => {
     const bg = await px(page, 5, 5)
     const fg = await px(page, 100, 75)
     assert(bg[3] < 40 && fg[3] > 200, `bg ${bg} fg ${fg}`)
+  })
+  await t('H1c 분석 중에도 화면이 멈추지 않음 (일꾼 스레드) + 두 단계 진행 표시', async () => {
+    const r = await page.evaluate(() => ({ worst: Math.max(0, ...window.__lt), labels: [...window.__labels] }))
+    assert(r.worst < 800, `화면 스레드가 ${Math.round(r.worst)}ms 멈춤`)
+    assert(r.labels.some((l) => l.startsWith('1/2') && l.endsWith('%')) && r.labels.some((l) => l.startsWith('2/2')), JSON.stringify(r.labels))
+  })
+  await t('H1b 배경 제거 결과가 화면(GPU)에도 반영', async () => {
+    await page.waitForTimeout(500)
+    const lost = await page.evaluate(() => document.querySelector('[data-testid="canvas"] canvas').getContext('webgl2')?.isContextLost())
+    const gbg = await screenPx(page, 5, 5)
+    const gfg = await screenPx(page, 100, 75)
+    // 투명 = 어두운 체커(밝기 < 80), 피사체 = 빨강
+    assert(!lost && gbg[0] < 80 && gfg[0] > 150, `lost ${lost} screen bg ${gbg} fg ${gfg}`)
   })
   await t('H2 콘솔 오류 없음', async () => assert(errors.filter((e) => !/onnx|ort|wasm/i.test(e)).length === 0, errors.join('\n')))
   await closeApp(app)
@@ -822,6 +958,13 @@ groups.I = async () => {
     const img = await page.locator('[role="option"][data-layer] img').first().boundingBox()
     assert(img.y >= row.y - 0.5 && img.y + img.height <= row.y + row.height + 0.5, JSON.stringify({ row, img }))
   })
+  await t('I3b 캔버스를 눌러도 화면이 밀려 올라가지 않음 (작은 창)', async () => {
+    const top0 = await page.evaluate(() => document.querySelector('[data-testid="canvas"]').getBoundingClientRect().top)
+    await click(page, 10, 10)
+    const top1 = await page.evaluate(() => document.querySelector('[data-testid="canvas"]').getBoundingClientRect().top)
+    const scrolled = await page.evaluate(() => [document.scrollingElement.scrollTop, document.getElementById('root').scrollTop, document.getElementById('root').firstElementChild.scrollTop])
+    assert(top0 === top1 && scrolled.every((v) => v === 0), `canvas top ${top0} → ${top1}, scroll ${scrolled}`)
+  })
   await t('I4 그룹 마스크 추가 → 가리기', async () => {
     await press(page, 'Control+g')
     let d = await docInfo(page)
@@ -838,8 +981,9 @@ groups.I = async () => {
     const gpu = await screenPx(page, 5, 5)
     assert(gpu[3] === 255, 'screen')
   })
+  await t('I4b 그룹 마스크 화면 = CPU', async () => gpuMatchesCpu(page))
   await t('I5 마스크 반전·페더', async () => {
-    await menu(page, '레이어(L)', '마스크 반전')
+    await menu(page, '레이어(L)', '마스크 반전', '레이어 마스크')
     assert((await px(page, 5, 5))[3] === 255, 'invert')
     await press(page, 'm')
     await drag(page, [
@@ -848,7 +992,7 @@ groups.I = async () => {
     ])
     await press(page, 'Delete')
     await press(page, 'Control+d')
-    await menu(page, '레이어(L)', '마스크 페더…')
+    await menu(page, '레이어(L)', '마스크 페더…', '레이어 마스크')
     await page.getByRole('dialog').getByLabel('픽셀').fill('6')
     await dialogOk(page)
     const edge = await px(page, 20, 20)
@@ -878,7 +1022,7 @@ groups.I = async () => {
     )
   })
   await t('I7 WebP 내보내기 (투명 유지)', async () => {
-    await menu(page, '파일(F)', 'WebP로 내보내기…')
+    await menu(page, '파일(F)', 'WebP…', '내보내기')
     await page.waitForTimeout(800)
     await page.getByRole('dialog').getByRole('button', { name: '저장…' }).click()
     await page.waitForTimeout(800)
@@ -887,6 +1031,8 @@ groups.I = async () => {
   })
   await t('I8 최근 파일 메뉴', async () => {
     await page.getByRole('menubar').getByRole('menuitem', { name: '파일(F)', exact: true }).click()
+    await page.getByRole('menuitem', { name: '최근 파일' }).hover()
+    await page.waitForTimeout(200)
     const items = await page.getByRole('menuitem', { name: /^\d\. / }).count()
     await page.keyboard.press('Escape')
     assert(items >= 2, `recent ${items}`)
@@ -901,7 +1047,7 @@ groups.I = async () => {
     await page.getByRole('dialog').getByText('최신 (온라인)').click()
     await page
       .getByRole('dialog')
-      .getByText(/오프라인 — 최신 모델을 쓸 수 없습니다/)
+      .getByText(/인터넷에 연결되어 있지 않습니다/)
       .waitFor({ timeout: 8000 })
     await page.getByRole('dialog').getByRole('button', { name: '배경 제거' }).click()
     await page
@@ -916,7 +1062,7 @@ groups.I = async () => {
     await page.getByRole('dialog').getByText('최신 (온라인)').click()
     await page
       .getByRole('dialog')
-      .getByText(/● 온라인/)
+      .getByText(/● 인터넷에 연결되어 있어/)
       .waitFor({ timeout: 10000 })
     await page.getByRole('dialog').getByRole('button', { name: '배경 제거' }).click()
     await page.waitForFunction(() => window.__sc.editor.doc.layers[0].mask || window.__sc.editor.state.toast?.kind === 'err', null, { timeout: 240000 })
@@ -946,6 +1092,491 @@ groups.I = async () => {
     }
   })
   await closeApp(app).catch(() => {})
+}
+
+// J) v1.0 추가 기능 — PSD·안내선·잠금·선 그리기·도형 다시 고치기·스냅샷·세로쓰기·환경 설정·내보내기·임시 이동·미리보기 묶기
+groups.J = async () => {
+  const { app, page, errors } = await launch()
+  // PSD 픽스처 (ag-psd 로 만든 레이어 3장 + 폴더)
+  const { writePsdUint8Array, readPsd } = require_('ag-psd')
+  const solid = (w, h, c) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4).map((_, i) => c[i % 4]) })
+  const psdFile = path.join(FIX, 'layers.psd')
+  fs.writeFileSync(
+    psdFile,
+    writePsdUint8Array({
+      width: 120,
+      height: 80,
+      children: [
+        { name: '바탕', left: 0, top: 0, right: 120, bottom: 80, imageData: solid(120, 80, [255, 255, 255, 255]) },
+        { name: '폴더', opened: true, children: [{ name: '빨강', left: 10, top: 10, right: 50, bottom: 40, blendMode: 'multiply', imageData: solid(40, 30, [220, 30, 30, 255]) }] },
+        { name: '파랑', left: 60, top: 20, right: 100, bottom: 60, opacity: 0.5, imageData: solid(40, 40, [30, 60, 220, 255]) }
+      ]
+    })
+  )
+  await t('J1 PSD 열기 (레이어·폴더·혼합·불투명도)', async () => {
+    await openFile(app, page, 'layers.psd')
+    const d = await docInfo(page)
+    assert(d.w === 120 && d.h === 80, `${d.w}x${d.h}`)
+    const names = d.layers.map((l) => l.name)
+    assert(
+      ['바탕', '폴더', '빨강', '파랑'].every((n) => names.includes(n)),
+      names.join(',')
+    )
+    assert(d.layers.find((l) => l.name === '빨강').blend === 'multiply', 'blend')
+    assert(near(await px(page, 20, 20), [220, 30, 30, 255], 2), `px ${await px(page, 20, 20)}`)
+    await gpuMatchesCpu(page)
+  })
+  await t('J2 Ctrl+S 는 PSD 로 다시 저장 (Photoshop 과 주고받기)', async () => {
+    await page.evaluate(() => window.__sc.editor.set({ fg: [0, 200, 0] }))
+    await press(page, 'Control+Shift+n')
+    await press(page, 'Alt+Backspace')
+    await queueOpen(app) // 저장은 대화상자 없이 같은 경로
+    await press(page, 'Control+s')
+    await page.waitForTimeout(800)
+    const saved = path.join(OUT, 'layers.psd')
+    const target = fs.existsSync(saved) ? saved : psdFile
+    const r = readPsd(fs.readFileSync(target), { skipLayerImageData: true, skipCompositeImageData: true, skipThumbnail: true })
+    const count = (ls) => (ls ?? []).reduce((n, l) => n + 1 + count(l.children), 0)
+    assert(count(r.children) >= 5, `layers ${count(r.children)} in ${target}`)
+  })
+  await t('J3 눈금자에서 끌어 안내선 → 사각 선택이 붙음', async () => {
+    const ruler = await page.getByTestId('ruler-left').boundingBox()
+    const at = await toScreen(page, 30, 40)
+    await page.mouse.move(ruler.x + 8, at.y)
+    await page.mouse.down()
+    await page.mouse.move(at.x, at.y, { steps: 6 })
+    await page.mouse.up()
+    await page.waitForTimeout(200)
+    const g = await page.evaluate(() => window.__sc.editor.doc.guides)
+    assert(g && g.v.length === 1 && Math.abs(g.v[0] - 30) <= 1, JSON.stringify(g))
+    await press(page, 'm')
+    const z = await page.evaluate(() => window.__sc.editor.tab.view.zoom)
+    await drag(page, [
+      [5, 5],
+      [30 + 3 / z, 25]
+    ])
+    const sel = (await docInfo(page)).sel
+    assert(sel && sel.x + sel.w === Math.round(g.v[0]), `snap ${JSON.stringify(sel)} guide ${g.v[0]}`)
+    await press(page, 'Control+d')
+  })
+  await t('J4 안내선을 눈금자로 끌어 내면 지워짐 (이동 도구)', async () => {
+    await press(page, 'v')
+    const at = await toScreen(page, 30, 60)
+    const ruler = await page.getByTestId('ruler-left').boundingBox()
+    await page.mouse.move(at.x, at.y)
+    await page.mouse.down()
+    await page.mouse.move(ruler.x + 8, at.y, { steps: 6 })
+    await page.mouse.up()
+    await page.waitForTimeout(200)
+    const g = await page.evaluate(() => window.__sc.editor.doc.guides)
+    assert(g.v.length === 0, JSON.stringify(g))
+  })
+  await t('J5 위치 잠금 → 이동 안 됨, 픽셀 잠금 → 칠하기 안 됨', async () => {
+    await page.getByRole('button', { name: '위치 잠그기 (이동·변형 금지)' }).click()
+    const x0 = await page.evaluate(() => window.__sc.editor.doc.layers.find((l) => l.id === window.__sc.editor.doc.activeId).transform.x)
+    await drag(page, [
+      [60, 40],
+      [80, 40]
+    ])
+    const x1 = await page.evaluate(() => window.__sc.editor.doc.layers.find((l) => l.id === window.__sc.editor.doc.activeId).transform.x)
+    assert(x0 === x1, `moved ${x0} → ${x1}`)
+    await page.getByRole('button', { name: '픽셀 잠그기 (칠하기·지우기 금지)' }).click()
+    const before = await px(page, 60, 40)
+    await press(page, 'Alt+Backspace')
+    assert(near(await px(page, 60, 40), before, 0), 'filled despite lock')
+    const d = await docInfo(page)
+    assert(
+      d.layers.find((l) => l.id === d.active),
+      'active'
+    )
+    await page.getByRole('button', { name: '모두 잠그기' }).click()
+    await page.getByRole('button', { name: '모두 잠그기' }).click() // 모두 풀기
+  })
+  await t('J6 선 그리기 (선택 테두리 바깥 3px)', async () => {
+    await press(page, 'm')
+    await drag(page, [
+      [40, 30],
+      [80, 60]
+    ])
+    await page.evaluate(() => window.__sc.editor.set({ fg: [255, 0, 255] }))
+    await menu(page, '편집(E)', '선 그리기…')
+    await page.getByRole('dialog').getByText('바깥쪽', { exact: true }).click()
+    await dialogOk(page)
+    assert(near(await px(page, 38, 45), [255, 0, 255, 255], 30), `stroke ${await px(page, 38, 45)}`)
+    assert(!near(await px(page, 50, 45), [255, 0, 255, 255], 30), 'inside painted')
+    await press(page, 'Control+d')
+  })
+  await t('J7 도형: 크기 바꾸면 다시 그림 + 옵션으로 채우기 색 고치기', async () => {
+    await press(page, 'u')
+    await drag(page, [
+      [10, 50],
+      [30, 70]
+    ])
+    let d = await docInfo(page)
+    const id = d.active
+    const sh0 = await page.evaluate((id) => window.__sc.editor.doc.layers.find((l) => l.id === id).shape, id)
+    assert(sh0 && Math.abs(sh0.w - 20) <= 1, JSON.stringify(sh0))
+    await page.getByLabel('채우기 색').fill('#00ff00')
+    await page.waitForTimeout(200)
+    const sh1 = await page.evaluate((id) => window.__sc.editor.doc.layers.find((l) => l.id === id).shape, id)
+    assert(sh1.fill === '#00ff00', JSON.stringify(sh1))
+    assert(near(await px(page, 20, 60), [0, 255, 0, 255], 2), `fill ${await px(page, 20, 60)}`)
+    // 이동 도구로 오른쪽 아래 핸들을 끌어 키움 → 도형 크기 데이터가 따라 커짐 (색 입력칸에서 포커스를 빼야 단축키가 먹는다)
+    await page.evaluate(() => document.activeElement?.blur())
+    await press(page, 'v')
+    const t0 = await page.evaluate((id) => window.__sc.editor.doc.layers.find((l) => l.id === id).transform, id)
+    await drag(page, [
+      [t0.x + t0.width, t0.y + t0.height],
+      [t0.x + t0.width + 20, t0.y + t0.height + 20]
+    ])
+    const sh2 = await page.evaluate((id) => window.__sc.editor.doc.layers.find((l) => l.id === id), id)
+    assert(sh2.shape && sh2.shape.w > 30 && sh2.bitmap.width === sh2.transform.width, `reshape ${JSON.stringify(sh2.shape)} bmp ${sh2.bitmap.width} t ${sh2.transform.width}`)
+  })
+  await t('J8 스냅샷 → 되돌리기', async () => {
+    await page.getByRole('tab', { name: '작업 내역' }).click()
+    await page.getByRole('button', { name: '스냅샷 만들기' }).click()
+    const snapDocLayers = (await docInfo(page)).layers.length
+    await press(page, 'Control+Shift+n')
+    await press(page, 'Control+Shift+n')
+    await page.locator('[aria-label="스냅샷"] [role="option"]').first().click()
+    await page.waitForTimeout(200)
+    assert((await docInfo(page)).layers.length === snapDocLayers, 'snapshot restore')
+  })
+  await t('J9 세로쓰기 문자', async () => {
+    await press(page, 't')
+    await page.getByRole('button', { name: '세로쓰기', exact: true }).click()
+    await click(page, 100, 10)
+    const ta = page.getByTestId('text-editor')
+    await ta.waitFor()
+    await ta.fill('세로')
+    await ta.press('Control+Enter')
+    await page.waitForTimeout(250)
+    const d = await docInfo(page)
+    const tl = await page.evaluate(() => window.__sc.editor.doc.layers.find((l) => l.kind === 'text'))
+    assert(tl?.text?.vertical && tl.bitmap.height > tl.bitmap.width, JSON.stringify({ v: tl?.text?.vertical, w: tl?.bitmap.width, h: tl?.bitmap.height }))
+    assert(d.tool === 'move', 'Ctrl+Enter → 이동 도구')
+    await page.getByRole('button', { name: '세로쓰기', exact: true }).count() // 옵션 줄이 바뀌었을 수 있음
+    await page.evaluate(() => window.__sc.editor.setSettings({ typeVertical: false }))
+  })
+  await t('J10 Ctrl+끌기 = 임시 이동 (브러시 도구에서)', async () => {
+    await press(page, 'b')
+    const d = await docInfo(page)
+    const x0 = await page.evaluate(() => window.__sc.editor.doc.layers.find((l) => l.id === window.__sc.editor.doc.activeId).transform.x)
+    const tl = await page.evaluate(() => window.__sc.editor.doc.layers.find((l) => l.id === window.__sc.editor.doc.activeId).transform)
+    await drag(
+      page,
+      [
+        [tl.x + tl.width / 2, tl.y + tl.height / 2],
+        [tl.x + tl.width / 2 - 10, tl.y + tl.height / 2]
+      ],
+      { mods: ['Control'] }
+    )
+    const x1 = await page.evaluate(() => window.__sc.editor.doc.layers.find((l) => l.id === window.__sc.editor.doc.activeId).transform.x)
+    assert(Math.abs(x1 - (x0 - 10)) <= 1 && (await docInfo(page)).tool === 'brush', `x ${x0} → ${x1}`)
+    void d
+  })
+  await t('J11 미리보기가 남아도 새 명령 결과가 화면에 보임 (확정 안 한 그라데이션)', async () => {
+    await press(page, 'Control+Shift+n')
+    await press(page, 'g')
+    await drag(page, [
+      [0, 40],
+      [120, 40]
+    ])
+    // Enter 로 확정하지 않은 채 다른 명령 — 화면은 새 문서를 그려야 한다
+    await page.evaluate(() => {
+      const e = window.__sc.editor
+      const d = e.doc
+      e.commit({ ...d, layers: d.layers.map((l) => ({ ...l, visible: false })) }, '모두 숨기기')
+    })
+    await page.waitForTimeout(300)
+    const shown = await page.evaluate(() => window.__sc.editor.shownDoc === window.__sc.editor.doc)
+    assert(shown, 'stale preview drawn')
+    await press(page, 'Escape')
+    await press(page, 'Control+z')
+  })
+  await t('J12 레이어를 각각 PNG 로 내보내기', async () => {
+    const dir = path.join(OUT, 'layers')
+    fs.mkdirSync(dir, { recursive: true })
+    await queueOpen(app, dir)
+    await menu(page, '파일(F)', '레이어를 각각 PNG로…', '내보내기')
+    await page.waitForTimeout(1200)
+    const files = fs.readdirSync(dir)
+    assert(files.length >= 3 && files.every((f) => f.endsWith('.png')), files.join(','))
+  })
+  await t('J13 환경 설정: 실행 취소 단계 저장', async () => {
+    await press(page, 'Control+k')
+    await page.getByRole('dialog').getByLabel('실행 취소 단계 값').fill('120')
+    await dialogOk(page)
+    assert((await page.evaluate(() => window.__sc.editor.state.settings.historyLimit)) === 120, 'limit')
+  })
+  await t('J14 견본: 클릭하면 전경색', async () => {
+    await page.getByRole('tab', { name: '견본' }).click()
+    await page.getByRole('button', { name: '견본 #ffffff' }).first().click()
+    const fg = await page.evaluate(() => window.__sc.editor.state.fg)
+    assert(near(fg, [255, 255, 255], 0), `fg ${fg}`)
+  })
+  await t('J15 내비게이터: 축소본이 그려지고 끌면 화면이 따라감', async () => {
+    await page.getByRole('tab', { name: '내비게이터' }).click()
+    await page.waitForTimeout(900)
+    const nav = await page.getByTestId('navigator').boundingBox()
+    const v0 = await page.evaluate(() => window.__sc.editor.tab.view)
+    await press(page, 'Control+=')
+    await press(page, 'Control+=')
+    await page.mouse.click(nav.x + nav.width * 0.8, nav.y + nav.height * 0.8)
+    await page.waitForTimeout(200)
+    const v1 = await page.evaluate(() => window.__sc.editor.tab.view)
+    assert(v1.zoom > v0.zoom && (v1.panX !== v0.panX || v1.panY !== v0.panY), JSON.stringify({ v0, v1 }))
+    await page.getByRole('tab', { name: '작업 내역' }).click()
+  })
+  await t('J16 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n')))
+  await closeApp(app)
+}
+
+// K) 개체 선택 (AI, SlimSAM) — 대충 감싸면 테두리에 맞게
+groups.K = async () => {
+  const { app, page, errors } = await launch()
+  await openFile(app, page, 'subject.png') // 초록 바탕 + 가운데 빨간 원 (반지름 40)
+  const circleIoU = () =>
+    page.evaluate(() => {
+      const d = window.__sc.editor.doc
+      const m = d.selection?.mask
+      if (!m) return 0
+      let inter = 0
+      let uni = 0
+      for (let y = 0; y < d.height; y++)
+        for (let x = 0; x < d.width; x++) {
+          const a = (x - 100) ** 2 + (y - 75) ** 2 <= 40 ** 2
+          const b = m[y * d.width + x] > 127
+          if (a && b) inter++
+          if (a || b) uni++
+        }
+      return inter / uni
+    })
+  await t('K1 사각형으로 넉넉히 감싸면 원 테두리에 맞게 선택', async () => {
+    await page.evaluate(() => {
+      window.__lt = []
+      new PerformanceObserver((l) => l.getEntries().forEach((e) => window.__lt.push(e.duration))).observe({ type: 'longtask' })
+    })
+    await page.locator('[data-tool="objectSelect"]').click()
+    await drag(page, [
+      [45, 20],
+      [155, 130]
+    ])
+    await page.waitForFunction(() => !window.__sc.editor.state.progress && window.__sc.editor.doc.selection, null, { timeout: 120000 })
+    const iou = await circleIoU()
+    assert(iou > 0.9, `IoU ${iou.toFixed(3)}`)
+  })
+  await t('K2 분석 중에도 화면이 멈추지 않음', async () => {
+    const worst = await page.evaluate(() => Math.max(0, ...window.__lt))
+    assert(worst < 800, `${Math.round(worst)}ms 멈춤`)
+  })
+  await t('K3 테두리 +6px → 선택이 넓어짐, 되돌리면 원래대로', async () => {
+    const area = () => page.evaluate(() => window.__sc.editor.doc.selection.mask.reduce((a, v) => a + (v > 127 ? 1 : 0), 0))
+    const a0 = await area()
+    await page.evaluate(() => window.dispatchEvent(new Event('noop')))
+    const btn = page
+      .getByRole('toolbar', { name: '도구 옵션' })
+      .getByRole('button', { name: /넓히거나/ })
+      .first()
+    await btn.click()
+    const slider = page.getByRole('slider', { name: /넓히거나/ })
+    await slider.focus()
+    for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(600)
+    const a1 = await area()
+    assert(a1 > a0 * 1.2, `${a0} → ${a1}`)
+  })
+  await t('K4 클릭 한 번으로도 개체 선택 (두 번째부터 빠름)', async () => {
+    await press(page, 'Control+d')
+    const t0 = Date.now()
+    await click(page, 100, 75)
+    await page.waitForFunction(() => !window.__sc.editor.state.progress && window.__sc.editor.doc.selection, null, { timeout: 60000 })
+    const ms = Date.now() - t0
+    const iou = await circleIoU()
+    assert(iou > 0.85, `IoU ${iou.toFixed(3)}`)
+    assert(ms < 15000, `${ms}ms`)
+  })
+  await t('K5 올가미로 감싸기', async () => {
+    await press(page, 'Control+d')
+    await page.getByRole('button', { name: '올가미로 감싸기' }).click()
+    await drag(page, [
+      [100, 18],
+      [160, 45],
+      [160, 110],
+      [100, 135],
+      [40, 110],
+      [40, 45],
+      [100, 18]
+    ])
+    await page.waitForFunction(() => !window.__sc.editor.state.progress && window.__sc.editor.doc.selection, null, { timeout: 60000 })
+    const iou = await circleIoU()
+    assert(iou > 0.9, `IoU ${iou.toFixed(3)}`)
+  })
+  await t('K6 W 키: 마법봉 ↔ 개체 선택', async () => {
+    await press(page, 'v')
+    await press(page, 'w')
+    assert((await docInfo(page)).tool === 'wand', 'wand')
+    await press(page, 'w')
+    assert((await docInfo(page)).tool === 'objectSelect', 'object')
+  })
+  await t('K7 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n')))
+  await closeApp(app)
+}
+
+// L) P3 — 칠해서 잡기·가장자리 다듬기·추가 조정·추가 필터·정렬/분포·외부 광선·스타일 복사·히스토그램
+groups.L = async () => {
+  const { app, page, errors } = await launch()
+  await openFile(app, page, 'subject.png') // 초록 바탕 + 빨간 원
+  const iouCircle = () =>
+    page.evaluate(() => {
+      const d = window.__sc.editor.doc
+      const m = d.selection?.mask
+      if (!m) return 0
+      let i = 0
+      let u = 0
+      for (let y = 0; y < d.height; y++)
+        for (let x = 0; x < d.width; x++) {
+          const a = (x - 100) ** 2 + (y - 75) ** 2 <= 1600
+          const b = m[y * d.width + x] > 127
+          if (a && b) i++
+          if (a || b) u++
+        }
+      return i / u
+    })
+  await t('L1 칠해서 잡기: 원 위를 문지르면 원 전체', async () => {
+    await page.locator('[data-tool="objectSelect"]').click()
+    await page.getByRole('button', { name: '칠해서 잡기' }).click()
+    await drag(page, [
+      [85, 70],
+      [115, 80]
+    ])
+    await page.waitForFunction(() => !window.__sc.editor.state.progress && window.__sc.editor.doc.selection, null, { timeout: 120000 })
+    const iou = await iouCircle()
+    assert(iou > 0.85, `IoU ${iou.toFixed(3)}`)
+  })
+  await t('L2 가장자리 다듬기: 미리보기 후 확인하면 선택이 바뀜', async () => {
+    const before = await page.evaluate(() => window.__sc.editor.doc.selection.mask.slice())
+    await press(page, 'Control+Alt+r')
+    await page.getByRole('dialog').getByLabel('페더 값').fill('6')
+    await page.waitForTimeout(500)
+    assert(await page.evaluate(() => window.__sc.editor.shownDoc !== window.__sc.editor.doc), 'no preview')
+    await dialogOk(page)
+    const changed = await page.evaluate((b) => {
+      const m = window.__sc.editor.doc.selection.mask
+      let n = 0
+      for (let i = 0; i < m.length; i++) if (Math.abs(m[i] - b[i]) > 20) n++
+      return n
+    }, Array.from(before))
+    assert(changed > 50, `changed ${changed}`)
+    assert(await page.evaluate(() => window.__sc.editor.shownDoc === window.__sc.editor.doc), 'preview left')
+    await press(page, 'Control+d')
+  })
+  await t('L3 흑백 (Ctrl+Shift+Alt+B) → 회색', async () => {
+    await press(page, 'Control+Shift+Alt+b')
+    await page.getByRole('dialog').waitFor()
+    await dialogOk(page)
+    const p = await px(page, 100, 75)
+    assert(p[0] === p[1] && p[1] === p[2], `${p}`)
+    await press(page, 'Control+z')
+  })
+  await t('L4 포스터화·한계값 (조정 하위 메뉴)', async () => {
+    await menu(page, '이미지(I)', '한계값…', '조정')
+    await dialogOk(page)
+    const p = await px(page, 5, 5)
+    assert((p[0] === 0 || p[0] === 255) && p[0] === p[1], `${p}`)
+    await press(page, 'Control+z')
+  })
+  await t('L5 필터: 모자이크 16px', async () => {
+    await menu(page, '필터(T)', '모자이크·노이즈 감소…')
+    await page.getByRole('dialog').getByLabel('칸 크기 값').fill('16')
+    await page.waitForTimeout(300)
+    await dialogOk(page)
+    await page.waitForTimeout(500)
+    const a = await px(page, 64, 64)
+    const b = await px(page, 79, 79)
+    assert(near(a, b, 0), `${a} vs ${b}`)
+    await press(page, 'Control+z')
+  })
+  await t('L6 정렬·분포: 세 레이어를 왼쪽 맞춤 후 가로 분포', async () => {
+    await page.evaluate(() => {
+      const e = window.__sc.editor
+      let d = e.doc
+      const mk = (id, x) => ({
+        id,
+        name: id,
+        kind: 'pixel',
+        visible: true,
+        opacity: 1,
+        blend: 'normal',
+        bitmap: { width: 10, height: 10, data: new Uint8ClampedArray(400).fill(255) },
+        transform: { x, y: 10, width: 10, height: 10, rotation: 0, flipH: false, flipV: false },
+        parentId: null,
+        mask: null,
+        clip: false,
+        effects: null,
+        adjustment: null,
+        text: null
+      })
+      d = { ...d, layers: [...d.layers, mk('p1', 20), mk('p2', 50), mk('p3', 170)], activeId: 'p3' }
+      e.commit(d, '테스트 레이어')
+      e.set({ selectedIds: ['p1', 'p2', 'p3'] })
+    })
+    await press(page, 'v')
+    await page.getByRole('button', { name: '가로로 고르게 분포 (3장 이상)' }).click()
+    const xs = await page.evaluate(() => ['p1', 'p2', 'p3'].map((id) => window.__sc.editor.doc.layers.find((l) => l.id === id).transform.x))
+    assert(Math.abs(xs[1] - (xs[0] + xs[2]) / 2) <= 1, `distribute ${xs}`)
+    await page.getByRole('button', { name: /왼쪽 맞춤/ }).click()
+    const xs2 = await page.evaluate(() => ['p1', 'p2', 'p3'].map((id) => window.__sc.editor.doc.layers.find((l) => l.id === id).transform.x))
+    assert(
+      xs2.every((x) => x === xs2[0]),
+      `align ${xs2}`
+    )
+  })
+  await t('L7 외부 광선 + 레이어 효과 복사·붙여넣기', async () => {
+    await page.evaluate(() => {
+      const e = window.__sc.editor
+      e.quiet({ ...e.doc, activeId: 'p1' })
+      e.set({ selectedIds: ['p1'] })
+    })
+    await menu(page, '레이어(L)', '효과 설정…', '레이어 효과')
+    await page.getByRole('dialog').getByRole('tab', { name: '외부 광선' }).click()
+    await page.getByRole('dialog').getByText('사용').first().click()
+    await dialogOk(page)
+    const fx = await page.evaluate(() => window.__sc.editor.doc.layers.find((l) => l.id === 'p1').effects?.outerGlow?.enabled)
+    assert(fx, 'glow')
+    await menu(page, '레이어(L)', '레이어 효과 복사', '레이어 효과')
+    await page.evaluate(() => window.__sc.editor.set({ selectedIds: ['p2', 'p3'] }))
+    await menu(page, '레이어(L)', '레이어 효과 붙여넣기', '레이어 효과')
+    const both = await page.evaluate(() => ['p2', 'p3'].every((id) => window.__sc.editor.doc.layers.find((l) => l.id === id).effects?.outerGlow?.enabled))
+    assert(both, 'paste')
+    await gpuMatchesCpu(page, 12)
+  })
+  await t('L8 히스토그램 패널: 통계가 나옴', async () => {
+    await page.getByRole('tab', { name: '히스토그램' }).click()
+    await page.waitForTimeout(1200)
+    const txt = await page.locator('[aria-label="히스토그램"]').innerText()
+    assert(/평균\s*\n?\s*\d/.test(txt) && !/평균\s*\n?\s*·/.test(txt), txt)
+    await page.getByRole('tab', { name: '작업 내역' }).click()
+  })
+  await t('L10 사용 설명서 (F1): 탭마다 내용, 가로로 넘치지 않음', async () => {
+    await page
+      .locator('canvas')
+      .first()
+      .click({ position: { x: 5, y: 5 } })
+    await page.keyboard.press('F1')
+    const dlg = page.getByRole('dialog')
+    await dlg.waitFor()
+    for (const name of ['시작하기', '도구', '선택', '칠하기·고치기', '색 보정·필터', '레이어', '화면·파일']) {
+      await dlg.getByRole('tab', { name, exact: true }).click()
+      const r = await dlg.getByRole('tabpanel').evaluate((el) => ({ n: el.innerText.length, over: el.scrollWidth - el.clientWidth }))
+      assert(r.n > 80 && r.over <= 0, `${name} ${JSON.stringify(r)}`)
+    }
+    await page.keyboard.press('Escape')
+    await dlg.waitFor({ state: 'detached' })
+  })
+  await t('L9 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n')))
+  await closeApp(app)
 }
 
 const order = ONLY.length ? ONLY : Object.keys(groups)

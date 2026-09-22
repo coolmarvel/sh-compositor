@@ -6,6 +6,7 @@ import HighlightAltRounded from '@mui/icons-material/HighlightAltRounded'
 import GestureRounded from '@mui/icons-material/GestureRounded'
 import AutoFixNormalRounded from '@mui/icons-material/AutoFixNormalRounded'
 import CropRounded from '@mui/icons-material/CropRounded'
+import CenterFocusStrongOutlined from '@mui/icons-material/CenterFocusStrongOutlined'
 import BrushRounded from '@mui/icons-material/BrushRounded'
 import AutoFixOffRounded from '@mui/icons-material/AutoFixOffRounded'
 import HealingRounded from '@mui/icons-material/HealingRounded'
@@ -29,6 +30,7 @@ const ICONS: Record<string, JSX.Element> = {
   marquee: <HighlightAltRounded />,
   lasso: <GestureRounded />,
   wand: <AutoFixNormalRounded />,
+  objectSelect: <CenterFocusStrongOutlined />,
   crop: <CropRounded />,
   brush: <BrushRounded />,
   spotHealing: <HealingRounded />,
@@ -75,7 +77,17 @@ export default function ToolRail(): JSX.Element {
       {TOOLS.map((t) => (
         <Box key={t.key} sx={{ display: 'contents' }}>
           {GROUP_BREAK.has(t.key) && <Box aria-hidden sx={{ width: 22, my: '3px', borderTop: `1px solid ${chrome.separator}`, borderBottom: `1px solid ${color.canvas}` }} />}
-          <Tooltip title={`${t.key === 'brush' && brushMode === 'erase' ? '지우개' : t.label} (${t.shortcut})`} placement="right">
+          <Tooltip
+            placement="right"
+            title={
+              <Box sx={{ maxWidth: 240 }}>
+                <b>
+                  {t.key === 'brush' && brushMode === 'erase' ? '지우개' : t.label} ({t.shortcut})
+                </b>
+                <Box sx={{ mt: '2px', wordBreak: 'keep-all' }}>{t.desc}</Box>
+              </Box>
+            }
+          >
             <ButtonBase
               aria-label={t.label}
               aria-pressed={tool === t.key}
@@ -99,14 +111,14 @@ export default function ToolRail(): JSX.Element {
       <Box sx={{ flex: 1 }} />
       {/* 전경/배경색 */}
       <Box sx={{ position: 'relative', width: 30, height: 34, mt: `${space.base}px` }}>
-        <Tooltip title="배경색 (클릭 = 선택)" placement="right">
+        <Tooltip title="배경색 (누르면 색을 고릅니다)" placement="right">
           <ButtonBase
             aria-label="배경색"
             onClick={() => editor.set({ dialog: { kind: 'color', which: 'bg' } })}
             sx={{ position: 'absolute', right: 0, bottom: 4, width: 18, height: 18, bgcolor: rgb(bg), border: `1px solid ${color.text}`, outline: `1px solid ${color.canvas}` }}
           />
         </Tooltip>
-        <Tooltip title="전경색 (클릭 = 선택)" placement="right">
+        <Tooltip title="전경색 (누르면 색을 고릅니다)" placement="right">
           <ButtonBase
             aria-label="전경색"
             onClick={() => editor.set({ dialog: { kind: 'color', which: 'fg' } })}

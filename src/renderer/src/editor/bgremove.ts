@@ -1,3 +1,4 @@
+import { WorkerClient, WorkerUnavailableError } from '../util/workerClient'
 /**
  * AI 배경 제거 — 두 엔진 (둘 다 @imgly/background-removal, ONNX 를 이 PC 에서 실행):
  *
@@ -45,26 +46,54 @@ export async function checkOnline(timeoutMs = 4000): Promise<boolean> {
 }
 
 type Progress = (key: string, current: number, total: number) => void
+
+/** 진행 알림 — 불러오기는 퍼센트, 분석은 끝을 알 수 없어 움직이는 막대로 (두 단계를 따로 보여 준다) */
+export type BgProgress = (label: string, value?: number) => void
 const progressOf =
-  (onProgress?: (label: string) => void): Progress =>
+  (onProgress?: BgProgress): Progress =>
   (key, current, total) => {
-    if (key.startsWith('fetch')) onProgress?.(`모델 불러오는 중… ${Math.round((current / Math.max(1, total)) * 100)}%`)
-    else onProgress?.('피사체 분석 중…')
+    if (key.startsWith('fetch')) onProgress?.('1/2 모델 불러오는 중…', Math.round((current / Math.max(1, total)) * 100))
+    else onProgress?.('2/2 피사체 분석 중…', undefined)
   }
 
-/** 비트맵 → 피사체 마스크 (0~255, 비트맵 크기) */
-export async function subjectMask(bmp: Bitmap, refine: MatteRefine | null, opts: { engine: BgEngine; model?: OnlineModel }, onProgress?: (label: string) => void): Promise<Uint8Array> {
-  const png = encodePng(bmp.width, bmp.height, bmp.data)
+// ── 일꾼 (화면을 멈추지 않게 추론을 다른 스레드에서) ──
+const client = new WorkerClient<{ key: string; current: number; total: number }>(() => new Worker(new URL('./bgremoveWorker.ts', import.meta.url), { type: 'module' }), '배경 제거 일꾼이 멈췄습니다.')
+async function runInWorker(png: Uint8Array, opts: { engine: BgEngine; model?: OnlineModel }, progress: Progress): Promise<Uint8Array> {
+  const result = await client.request<{ bytes: Uint8Array }>(
+    { png, engine: opts.engine, model: opts.model, publicPath: opts.engine === 'offline' ? offlineBase() : '' },
+    (p) => progress(p.key, p.current, p.total),
+    [png.buffer]
+  )
+  return result.bytes
+}
+
+/** 화면 스레드에서 (일꾼을 못 쓸 때의 대비) */
+async function runHere(png: Uint8Array, opts: { engine: BgEngine; model?: OnlineModel }, progress: Progress): Promise<Uint8Array> {
   const blob = new Blob([png as unknown as BlobPart], { type: 'image/png' })
   let out: Blob
   if (opts.engine === 'online') {
     const { removeBackground } = await import('@imgly/background-removal-online')
-    out = await removeBackground(blob, { model: opts.model ?? 'isnet_fp16', output: { format: 'image/png' }, progress: progressOf(onProgress) })
+    out = await removeBackground(blob, { model: opts.model ?? 'isnet_fp16', output: { format: 'image/png' }, progress })
   } else {
     const { removeBackground } = await import('@imgly/background-removal')
-    out = await removeBackground(blob, { publicPath: offlineBase(), output: { format: 'image/png' }, progress: progressOf(onProgress) })
+    out = await removeBackground(blob, { publicPath: offlineBase(), output: { format: 'image/png' }, progress })
   }
-  const res = decodePng(new Uint8Array(await out.arrayBuffer()))
+  return new Uint8Array(await out.arrayBuffer())
+}
+
+/** 비트맵 → 피사체 마스크 (0~255, 비트맵 크기) */
+export async function subjectMask(bmp: Bitmap, refine: MatteRefine | null, opts: { engine: BgEngine; model?: OnlineModel }, onProgress?: BgProgress): Promise<Uint8Array> {
+  const progress = progressOf(onProgress)
+  onProgress?.('1/2 모델 불러오는 중…', 0)
+  let bytes: Uint8Array
+  try {
+    bytes = await runInWorker(encodePng(bmp.width, bmp.height, bmp.data), opts, progress)
+  } catch (e) {
+    if (!(e instanceof WorkerUnavailableError)) throw e
+    bytes = await runHere(encodePng(bmp.width, bmp.height, bmp.data), opts, progress)
+  }
+  onProgress?.('마스크 다듬는 중…', undefined)
+  const res = decodePng(bytes)
   if (res.width !== bmp.width || res.height !== bmp.height) throw new Error(`배경 제거 결과 크기가 다릅니다 (${res.width}×${res.height})`)
   const n = bmp.width * bmp.height
   // 모델 출력 알파 × 원본 알파 (원래 투명한 곳은 그대로 투명)

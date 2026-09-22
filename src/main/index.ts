@@ -1,17 +1,41 @@
+import { assetPath, writeAtomic } from './files'
 import { app, shell, BrowserWindow, ipcMain, dialog, protocol, net, clipboard, nativeImage } from 'electron'
-import { join, basename, normalize, extname } from 'path'
-import { readFile, writeFile, readdir, stat, mkdir, rm } from 'fs/promises'
+import { join, basename, extname } from 'path'
+import { readFile, readdir, stat, mkdir, rm } from 'fs/promises'
 import { pathToFileURL } from 'url'
 
 // ── AI 배경 제거 모델 서빙 (bgrm://) — 파일 변환기와 같은 방식 (완전 오프라인) ──
-protocol.registerSchemesAsPrivileged([{ scheme: 'bgrm', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }])
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'bgrm', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+  // 개체 선택 AI(SlimSAM) 모델·onnxruntime wasm — resources/sam (scripts/fetch-models.cjs)
+  { scheme: 'aimodel', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
+])
+
+function samDataDir(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'sam') : join(app.getAppPath(), 'resources/sam')
+}
+
+/** 폴더 하나를 커스텀 프로토콜로 (경로 탈출 방지, CORS 허용, 모듈 스크립트는 JS 형식으로) */
+function serveDir(scheme: string, dirOf: () => string): void {
+  protocol.handle(scheme, async (request) => {
+    const url = new URL(request.url)
+    const full = assetPath(dirOf(), url.hostname, url.pathname)
+    if (!full) return new Response('forbidden', { status: 403 })
+    const res = await net.fetch(pathToFileURL(full).toString())
+    const headers = new Headers(res.headers)
+    headers.set('Access-Control-Allow-Origin', '*')
+    if (full.endsWith('.mjs') || full.endsWith('.js')) headers.set('Content-Type', 'text/javascript')
+    if (full.endsWith('.wasm')) headers.set('Content-Type', 'application/wasm')
+    return new Response(res.body, { status: res.status, headers })
+  })
+}
 
 function bgrmDataDir(): string {
   return app.isPackaged ? join(process.resourcesPath, 'bgrm-data') : join(app.getAppPath(), 'node_modules/@imgly/background-removal-data/dist')
 }
 
 /** 실행 인자로 넘어온 파일(더블클릭으로 연 .shcomp·이미지) */
-const pendingOpen: string[] = process.argv.slice(1).filter((a) => /\.(shcomp|png|jpe?g|webp|bmp|gif|tiff?|heic|heif)$/i.test(a))
+const pendingOpen: string[] = process.argv.slice(1).filter((a) => /\.(shcomp|psd|psb|png|jpe?g|webp|bmp|gif|tiff?|heic|heif)$/i.test(a))
 
 let mainWindow: BrowserWindow | null = null
 
@@ -80,7 +104,7 @@ ipcMain.handle('win:confirmClose', (e) => {
 })
 
 // ── 파일 ──
-const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff', 'heic', 'heif']
+const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff', 'heic', 'heif', 'psd', 'psb']
 
 /** 열기 대화상자 → [{ path, name, bytes }] */
 ipcMain.handle('fs:open', async (e, kind: 'project' | 'image' | 'any') => {
@@ -126,8 +150,8 @@ const safeId = (id: string): string => id.replace(/[^a-zA-Z0-9_-]/g, '')
 ipcMain.handle('recovery:write', async (_e, id: string, meta: { name: string; path: string | null }, bytes: Uint8Array) => {
   await mkdir(recoveryDir(), { recursive: true })
   const base = join(recoveryDir(), safeId(id))
-  await writeFile(`${base}.shcomp`, Buffer.from(bytes))
-  await writeFile(`${base}.json`, JSON.stringify({ ...meta, savedAt: Date.now() }))
+  await writeAtomic(`${base}.shcomp`, bytes)
+  await writeAtomic(`${base}.json`, JSON.stringify({ ...meta, savedAt: Date.now() }))
 })
 ipcMain.handle('recovery:list', async () => {
   const names = await readdir(recoveryDir()).catch(() => [] as string[])
@@ -149,19 +173,30 @@ ipcMain.handle('recovery:clear', async (_e, id: string) => {
   await rm(`${base}.json`, { force: true })
 })
 
+/** 폴더 고르기 (레이어를 각각 내보낼 곳) */
+ipcMain.handle('fs:chooseDir', async (e, title: string) => {
+  const r = await dialog.showOpenDialog(sender(e)!, { title, properties: ['openDirectory', 'createDirectory'] })
+  return r.canceled || !r.filePaths[0] ? null : r.filePaths[0]
+})
+
 /** 경로로 읽기 (드롭·실행 인자·최근 파일) */
 ipcMain.handle('fs:read', async (_e, p: string) => ({ path: p, name: basename(p), bytes: new Uint8Array(await readFile(p)) }))
 
 /** 저장 대화상자 → 경로 (취소면 null) */
 const SAVE_KINDS = {
   project: { name: 'SH Compositor 프로젝트', ext: ['shcomp'] },
+  psd: { name: 'Photoshop (PSD)', ext: ['psd'] },
   png: { name: 'PNG', ext: ['png'] },
   jpeg: { name: 'JPEG', ext: ['jpg', 'jpeg'] },
   webp: { name: 'WebP', ext: ['webp'] }
 } as const
 ipcMain.handle('fs:saveAs', async (e, defaultName: string, kind: keyof typeof SAVE_KINDS) => {
   const k = SAVE_KINDS[kind] ?? SAVE_KINDS.png
-  const filters = [{ name: k.name, extensions: [...k.ext] }]
+  // 프로젝트 저장은 .shcomp 와 .psd 중에서 고른다 (포토샵과 주고받기)
+  const filters =
+    kind === 'project' || kind === 'psd'
+      ? [SAVE_KINDS[kind], SAVE_KINDS[kind === 'project' ? 'psd' : 'project']].map((f) => ({ name: f.name, extensions: [...f.ext] }))
+      : [{ name: k.name, extensions: [...k.ext] }]
   const r = await dialog.showSaveDialog(sender(e)!, { title: '저장', defaultPath: defaultName, filters })
   if (r.canceled || !r.filePath) return null
   let p = r.filePath
@@ -169,9 +204,9 @@ ipcMain.handle('fs:saveAs', async (e, defaultName: string, kind: keyof typeof SA
   return p
 })
 
-/** 원자적 쓰기 (임시 파일 → 이름 바꾸기 대신 한 번에 — Windows 잠금 회피) */
+/** 같은 폴더 임시 파일을 완성한 뒤 교체 — 실패 시 기존 문서 보존 */
 ipcMain.handle('fs:write', async (_e, p: string, bytes: Uint8Array) => {
-  await writeFile(p, Buffer.from(bytes))
+  await writeAtomic(p, bytes)
   return p
 })
 
@@ -194,17 +229,8 @@ ipcMain.handle('clip:readImage', () => {
 ipcMain.handle('app:pendingOpen', () => pendingOpen.splice(0))
 
 app.whenReady().then(() => {
-  protocol.handle('bgrm', async (request) => {
-    const url = new URL(request.url)
-    const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '')
-    const base = bgrmDataDir()
-    const full = normalize(join(base, rel))
-    if (!full.startsWith(normalize(base))) return new Response('forbidden', { status: 403 })
-    const res = await net.fetch(pathToFileURL(full).toString())
-    const headers = new Headers(res.headers)
-    headers.set('Access-Control-Allow-Origin', '*')
-    return new Response(res.body, { status: res.status, headers })
-  })
+  serveDir('aimodel', samDataDir)
+  serveDir('bgrm', bgrmDataDir)
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -215,7 +241,7 @@ app.whenReady().then(() => {
 if (!app.requestSingleInstanceLock()) app.quit()
 else
   app.on('second-instance', (_e, argv) => {
-    const files = argv.slice(1).filter((a) => /\.(shcomp|png|jpe?g|webp|bmp|gif|tiff?|heic|heif)$/i.test(a))
+    const files = argv.slice(1).filter((a) => /\.(shcomp|psd|psb|png|jpe?g|webp|bmp|gif|tiff?|heic|heif)$/i.test(a))
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()

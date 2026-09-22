@@ -60,9 +60,14 @@ export function polygonMask(width: number, height: number, pts: { x: number; y: 
   const m = new Uint8Array(width * height)
   if (pts.length < 3) return m
   const S = antialias ? 4 : 1
-  const ys = pts.map((p) => p.y)
-  const minY = Math.max(0, Math.floor(Math.min(...ys)))
-  const maxY = Math.min(height, Math.ceil(Math.max(...ys)))
+  let low = Infinity,
+    high = -Infinity
+  for (const p of pts) {
+    low = Math.min(low, p.y)
+    high = Math.max(high, p.y)
+  }
+  const minY = Math.max(0, Math.floor(low))
+  const maxY = Math.min(height, Math.ceil(high))
   const acc = new Uint16Array(width)
   const xs: number[] = []
   for (let y = minY; y < maxY; y++) {
@@ -80,11 +85,11 @@ export function polygonMask(width: number, height: number, pts: { x: number; y: 
       for (let k = 0; k + 1 < xs.length; k += 2) {
         const xa = xs[k]
         const xb = xs[k + 1]
-        for (let sx = 0; sx < S * width; sx++) {
-          const px = (sx + 0.5) / S
-          if (px < xa) continue
-          if (px >= xb) break
-          acc[(sx / S) | 0]++
+        const first = Math.max(0, Math.ceil(xa * S - 0.5))
+        const end = Math.min(S * width, Math.ceil(xb * S - 0.5))
+        // Scan only intersecting pixels, counting subpixel samples without visiting the left margin.
+        for (let x = Math.floor(first / S); x < Math.ceil(end / S); x++) {
+          acc[x] += Math.min(end, (x + 1) * S) - Math.max(first, x * S)
           touched = true
         }
       }
@@ -284,4 +289,31 @@ export function selectionOutline(sel: Selection): Float32Array {
     }
   }
   return Float32Array.from(segs)
+}
+
+/**
+ * 선택 테두리의 선(Stroke) 덮임 0~1 — 편집 ▸ 선 그리기 (포토샵 Edit ▸ Stroke).
+ * position: outside = 선택 바깥으로, inside = 안쪽으로, center = 경계 가운데로 width 만큼.
+ */
+export function selectionStrokeCoverage(sel: Selection, width: number, position: 'inside' | 'center' | 'outside'): Float32Array {
+  const W = sel.width
+  const H = sel.height
+  const f = Float32Array.from(sel.mask, (v) => v / 255)
+  const grow = position === 'outside' ? width : position === 'center' ? width / 2 : 0
+  const shrink = position === 'inside' ? width : position === 'center' ? width / 2 : 0
+  const outer = grow > 0 ? extreme(f, W, H, grow, false) : f
+  const inner = shrink > 0 ? extreme(f, W, H, shrink, true) : f
+  const out = new Float32Array(f.length)
+  for (let i = 0; i < f.length; i++) out[i] = Math.max(0, Math.min(1, outer[i] - inner[i]))
+  return out
+}
+
+/** 선택 매끄럽게 — 뾰족한 모서리·계단을 둥글게 (흐린 뒤 경계에서 다시 자름, 포토샵 Select ▸ Modify ▸ Smooth) */
+export function smoothSelection(sel: Selection, radius: number): Selection | null {
+  if (radius <= 0) return sel
+  const blurred = featherSelection(sel, radius)
+  if (!blurred) return null
+  const m = new Uint8Array(blurred.mask.length)
+  for (let i = 0; i < m.length; i++) m[i] = Math.max(0, Math.min(255, Math.round((blurred.mask[i] - 127.5) * 4 + 127.5)))
+  return makeSelection(sel.width, sel.height, m)
 }

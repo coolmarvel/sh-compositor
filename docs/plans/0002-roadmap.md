@@ -4,6 +4,8 @@ created: 2026-09-21
 updated: 2026-09-21
 ---
 
+> 2026-09-21 v1.0.0: P1·P2 모두 구현 (아래 표의 항목). 남은 것은 P3 와 todo.md.
+
 # 0002 로드맵 — 보완·추가 기능
 
 v0.1.0 으로 Compositor 기능은 모두 옮겼다(plans/0001). 이 문서는 **"편집기로서 더 쓸 만하게"** 만들 후보를 우선순위로 정리한다.
@@ -23,7 +25,7 @@ v0.1.0 으로 Compositor 기능은 모두 옮겼다(plans/0001). 이 문서는 *
 - [x] 최근 파일(파일 메뉴), WebP 내보내기, **자동 저장·비정상 종료 복구** (`editor/autosave.ts`)
 - [x] GPU 가 매 프레임 다시 합성하던 문제(개미 행진 때마다) — `GLRenderer.setDoc` 정리
 
-## P1 — 다음에 할 것 (가치 큼 · 범위 명확)
+## P1 — v1.0.0 에서 구현 완료
 
 | # | 기능 | 왜 | 어디 / 방법 |
 |---|---|---|---|
@@ -34,7 +36,7 @@ v0.1.0 으로 Compositor 기능은 모두 옮겼다(plans/0001). 이 문서는 *
 | 5 | **색상 견본 패널 + HSB/Lab 입력** | 색 고르기가 대화상자뿐이라 느림 | 오른쪽 패널 탭(레이어 / 견본 / 내비게이터), localStorage 견본 |
 | 6 | **내비게이터(축소 보기)** | 큰 이미지 확대 작업 때 위치 파악 | GL 합성 텍스처를 축소 그리기 + 보기 사각형 끌기 |
 
-## P2 — 보완 (완성도)
+## P2 — v1.0.0 에서 구현 완료
 
 | # | 기능 | 왜 | 어디 / 방법 |
 |---|---|---|---|
@@ -48,7 +50,20 @@ v0.1.0 으로 Compositor 기능은 모두 옮겼다(plans/0001). 이 문서는 *
 | 14 | 큰 문서(8K+) **브러시 성능 측정**·타일 업로드 | 대형 사진 리터칭 | `uploadRect` 경로 프로파일, 256px 타일 |
 | 15 | **환경 설정** 대화상자 (자동 저장 주기, 실행취소 수, GPU 끄기, 기본 배경 제거 모델) | 지금은 코드 상수 | `store.ts` 설정 + localStorage |
 
-## P3 — 아이디어 (필요해지면)
+## P3 — v1.0.1 에서 구현 완료 (포토샵 기준 보완)
+
+| # | 항목 | 포토샵 대응 | 구현 위치 |
+|---|---|---|---|
+| 1 | **개체 선택 (AI)** — 사각형·올가미로 넉넉히 감싸거나 칠하면 테두리에 맞게 선택, Shift/Alt 클릭으로 다듬기, 테두리·부드럽게 슬라이더 | Object Selection Tool | `editor/objectSelect.ts`·`samWorker.ts`·`tools/objectSelect.ts` (SlimSAM, 오프라인) |
+| 2 | **가장자리 다듬기** (Ctrl+Alt+R) — 반경·매끄럽게·페더·대비·이동, 바깥 어둡게 보기 | Select and Mask | `DialogHost.tsx RefineEdgeDialog` |
+| 3 | **조정 추가** — 흑백·색상 균형·활기·포스터화·한계값 + 이미지 ▸ 조정 하위 메뉴 | Image ▸ Adjustments | `core/adjust2.ts`, `MoreAdjustHost` |
+| 4 | **선명하게** (언샤프 마스크·하이 패스), **모자이크·노이즈 감소**(중간값) | Filter ▸ Sharpen / Pixelate / Noise | `core/filters.ts`, `FiltersDialog` 탭 3개 |
+| 5 | **정렬·분포** — 이동 도구 옵션 줄 버튼 8개 | Align / Distribute | `actions.alignLayers`·`distributeLayers` |
+| 6 | **외부 광선** 레이어 효과 (PSD 왕복 포함) | Outer Glow | `core/effects.ts`, `core/doc/psd.ts` |
+| 7 | **레이어 효과 복사·붙여넣기·지우기** | Copy/Paste Layer Style | `actions.ts`, 레이어 메뉴·오른쪽 클릭 |
+| 8 | **히스토그램 패널** (채널별·통계) | Histogram panel | `panels/HistogramPanel.tsx` |
+
+## P4 — 아이디어 (필요해지면)
 
 - 일괄 처리(액션 녹화 → 폴더 전체 적용) — 파일 변환기와 역할이 겹치므로 변환기 쪽에 둘지 먼저 결정
 - 텍스트 경로, 펜 도구(베지어 패스 → 선택)

@@ -46,7 +46,7 @@ export default function TitleBar({ title = 'SH Compositor', subtitle }: { title?
       ?.isMaximized()
       .then(setMaximized)
       .catch(() => {})
-    window.api.win?.onMaximized(setMaximized)
+    return window.api.win?.onMaximized(setMaximized)
   }, [])
 
   const ctl = (kind: 'min' | 'max' | 'close', onClick: () => void, label: string): JSX.Element => (
@@ -88,7 +88,7 @@ export default function TitleBar({ title = 'SH Compositor', subtitle }: { title?
         </Box>
         {subtitle && (
           <Box component="span" sx={{ fontSize: font.md, color: color.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            — {subtitle}
+            {subtitle}
           </Box>
         )}
       </Box>

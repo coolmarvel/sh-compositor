@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Snackbar from '@mui/material/Snackbar'
@@ -6,17 +6,22 @@ import Alert from '@mui/material/Alert'
 import TitleBar from './components/chrome/TitleBar'
 import MenuBar, { type MenuDef } from './components/chrome/MenuBar'
 import StatusBar from './components/chrome/StatusBar'
-import ToolRail from './components/ToolRail'
-import ToolHeader from './components/ToolHeader'
-import TabStrip from './components/TabStrip'
-import CanvasView from './components/CanvasView'
-import LayersPanel, { openAdjustmentEditor } from './components/panels/LayersPanel'
-import HistoryPanel from './components/panels/HistoryPanel'
-import DialogHost from './components/DialogHost'
+import ToolRailRaw from './components/ToolRail'
+import ToolHeaderRaw from './components/ToolHeader'
+import TabStripRaw from './components/TabStrip'
+import CanvasViewRaw from './components/CanvasView'
+import LayersPanelRaw, { openAdjustmentEditor } from './components/panels/LayersPanel'
+import HistoryPanelRaw from './components/panels/HistoryPanel'
+import DialogHostRaw from './components/DialogHost'
+import PanelTabs from './components/panels/PanelTabs'
+import SwatchesPanel from './components/panels/SwatchesPanel'
+import NavigatorPanel from './components/panels/NavigatorPanel'
+import HistogramPanel from './components/panels/HistogramPanel'
 import { editor, useEditor, useDoc, type Tool } from './editor/store'
 import * as A from './editor/actions'
-import { openDialog, openPaths, openCompFolder, recentFiles, clearRecent, saveProject, exportPng, copyToClipboard, pasteFromClipboard } from './editor/io'
+import { openDialog, openPaths, openCompFolder, recentFiles, clearRecent, saveProject, exportPng, exportLayers, exportSelection, copyToClipboard, pasteFromClipboard } from './editor/io'
 import { startAutosave, pendingRecovery } from './editor/autosave'
+import { clearGuides } from './editor/guides'
 import { runCommand } from './editor/commands'
 import { toolInfo } from './tools'
 import { getLayer, canUndo, canRedo, undoLabel, redoLabel, ADJUSTMENT_KINDS } from '@core/index'
@@ -27,6 +32,15 @@ import { useCursor } from './editor/cursor'
 import { ui } from './theme'
 
 const { color, space, font, shadow, chrome } = ui
+
+// 패널들은 스토어를 직접 구독한다 — App(메뉴 상태 때문에 문서가 바뀔 때마다 다시 그려짐)을 따라 다시 그리지 않게
+const ToolRail = memo(ToolRailRaw)
+const ToolHeader = memo(ToolHeaderRaw)
+const TabStrip = memo(TabStripRaw)
+const CanvasView = memo(CanvasViewRaw)
+const LayersPanel = memo(LayersPanelRaw)
+const HistoryPanel = memo(HistoryPanelRaw)
+const DialogHost = memo(DialogHostRaw)
 
 /** 글자 단축키 → 도구 (Compositor NavigationTool 단축키) */
 const TOOL_KEYS: Record<string, Tool> = {
@@ -66,7 +80,7 @@ function StartScreen(): JSX.Element {
         }}
       >
         <Box sx={{ fontSize: font.xl, fontWeight: font.bold }}>SH Compositor</Box>
-        <Box sx={{ color: color.textSecondary }}>레이어·선택·브러시·보정 — 인터넷 없이 이 PC에서 편집합니다.</Box>
+        <Box sx={{ color: color.textSecondary }}>인터넷 없이 이 PC에서 레이어로 사진을 편집합니다.</Box>
         <Button variant="contained" onClick={() => editor.set({ dialog: { kind: 'newCanvas' } })}>
           새로 만들기… (Ctrl+N)
         </Button>
@@ -85,7 +99,7 @@ function StartScreen(): JSX.Element {
 /** 상태 줄: 커서 좌표 + 그 자리의 보이는 색 (포토샵 정보 패널의 축약) */
 function CursorPane(): JSX.Element {
   const c = useCursor()
-  if (!c) return <span>X — · Y —</span>
+  if (!c) return <span>X · Y</span>
   const hexOf = (v: number): string => v.toString(16).padStart(2, '0')
   return (
     <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
@@ -139,6 +153,7 @@ export default function App(): JSX.Element {
   const progress = useEditor((s) => s.progress)
   const toast = useEditor((s) => s.toast)
   const showGrid = useEditor((s) => s.showGrid)
+  const settings = useEditor((s) => s.settings)
   const layersWidth = useEditor((s) => s.layersWidth)
   const maskEditing = useEditor((s) => s.maskEditing)
   const selectedCount = useEditor((s) => s.selectedIds.length)
@@ -148,16 +163,22 @@ export default function App(): JSX.Element {
 
   // 창 닫기·파일 연결로 열기·붙여넣기
   useEffect(() => {
-    window.api.win.onCloseRequest(() => A.requestQuit())
-    window.api.onOpenFiles((p) => void openPaths(p))
+    const offClose = window.api.win.onCloseRequest(() => A.requestQuit())
+    const offOpen = window.api.onOpenFiles((p) => void openPaths(p))
     void window.api.pendingOpen().then((p) => {
       if (p.length) void openPaths(p)
     })
-    startAutosave()
+    const stopAutosave = startAutosave()
     void pendingRecovery().then((items) => {
       if (items.length && !editor.state.dialog) editor.set({ dialog: { kind: 'recover', items } })
     })
-    window.api.onRecovered((reason) => editor.toast('err', `화면 프로세스가 복구되었습니다 (${reason}). 저장하지 않은 작업은 사라졌을 수 있습니다.`))
+    const offRecovered = window.api.onRecovered((reason) => editor.toast('err', `화면 프로세스가 복구되었습니다 (${reason}). 저장하지 않은 작업은 사라졌을 수 있습니다.`))
+    return () => {
+      offClose()
+      offOpen()
+      offRecovered()
+      stopAutosave()
+    }
   }, [])
 
   // 전역 단축키 — Photoshop·Compositor 배치
@@ -195,6 +216,8 @@ export default function App(): JSX.Element {
           l: () => editor.set({ dialog: { kind: 'adjust', tab: 'levels' } }),
           m: () => editor.set({ dialog: { kind: 'adjust', tab: 'curves' } }),
           u: () => editor.set({ dialog: { kind: 'adjust', tab: 'hsl' } }),
+          b: () => editor.set({ dialog: { kind: 'moreAdjust', which: 'colorBalance' } }),
+          SAb: () => editor.set({ dialog: { kind: 'moreAdjust', which: 'blackWhite' } }),
           i: () => A.quickAdjust('invert'),
           Su: () => A.quickAdjust('desaturate'),
           Sl: () => A.quickAdjust('color'),
@@ -219,12 +242,19 @@ export default function App(): JSX.Element {
           '0': () => runCommand('fit'),
           '1': () => runCommand('actualSize'),
           "'": () => editor.set({ showGrid: !editor.state.showGrid }),
+          r: () => editor.setSettings({ showRulers: !editor.state.settings.showRulers }),
+          k: () => editor.set({ dialog: { kind: 'preferences' } }),
+          Ar: () => editor.state.tabs.length && editor.doc?.selection && editor.set({ dialog: { kind: 'refineEdge' } }),
+          ';': () => editor.setSettings({ showGuides: !editor.state.settings.showGuides }),
+          'S;': () => editor.setSettings({ snapGuides: !editor.state.settings.snapGuides }),
+          'A;': () => editor.setSettings({ lockGuides: !editor.state.settings.lockGuides }),
           backspace: () => A.fill('bg')
         }
         const fn = map[combo]
         if (fn) run(fn)
         return
       }
+      if (e.key === 'F1' && !e.shiftKey && !e.altKey) return run(() => editor.set({ dialog: { kind: 'help' } }))
       if (e.altKey && k === 'backspace') return run(() => A.fill('fg'))
       if (e.shiftKey && e.key === 'F5') return run(A.contentAwareFill)
       if (e.shiftKey && e.key === 'F6') return run(() => editor.state.tabs.length && editor.set({ dialog: { kind: 'selectAmount', op: 'feather' } }))
@@ -239,6 +269,8 @@ export default function App(): JSX.Element {
         run(() => {
           if (k === 'e') editor.setSettings({ brushMode: 'erase' })
           if (k === 'b') editor.setSettings({ brushMode: 'paint' })
+          // W: 마법봉 ↔ 개체 선택 (포토샵 도구 묶음처럼 누를 때마다 번갈아)
+          if (k === 'w' && editor.state.tool === 'wand') return editor.setTool('objectSelect')
           editor.setTool(t)
         })
       }
@@ -260,22 +292,37 @@ export default function App(): JSX.Element {
       items: [
         { label: '새로 만들기…', shortcut: 'Ctrl+N', onClick: dlg({ kind: 'newCanvas' }) },
         { label: '열기…', shortcut: 'Ctrl+O', onClick: () => void openDialog() },
+        {
+          label: '최근 파일',
+          onClick: () => {},
+          submenu: recent.length
+            ? [
+                ...recent.map((p, i) => ({ label: `${i + 1}. ${p.split(/[\\/]/).pop()}`, shortcut: p.length > 40 ? `…${p.slice(-38)}` : p, onClick: () => void openPaths([p]) })),
+                'sep' as const,
+                { label: '목록 지우기', onClick: clearRecent }
+              ]
+            : [{ label: '최근 파일 없음', onClick: () => {}, disabled: true }]
+        },
         { label: 'Compositor 프로젝트(.comp) 폴더 열기…', onClick: () => void editor.busy('Compositor 프로젝트 여는 중…', () => openCompFolder()) },
         { label: '레이어로 가져오기…', shortcut: 'Ctrl+Shift+O', onClick: () => void A.importDialog(), disabled: !has },
         'sep',
-        ...(recent.length
-          ? [
-              ...recent.map((p, i) => ({ label: `${i + 1}. ${p.split(/[\\/]/).pop()}`, shortcut: p.length > 40 ? `…${p.slice(-38)}` : p, onClick: () => void openPaths([p]) })),
-              { label: '최근 파일 목록 지우기', onClick: clearRecent }
-            ]
-          : [{ label: '최근 파일 없음', onClick: () => {}, disabled: true }]),
-        'sep',
         { label: '저장', shortcut: 'Ctrl+S', onClick: () => void saveProject(), disabled: !has },
         { label: '다른 이름으로 저장…', shortcut: 'Ctrl+Shift+S', onClick: () => void saveProject(true), disabled: !has },
+        { label: 'Photoshop(PSD)로 저장…', onClick: () => void saveProject(true, 'psd'), disabled: !has },
         'sep',
-        { label: 'PNG로 내보내기…', shortcut: 'Ctrl+Shift+Alt+S', onClick: () => void exportPng(), disabled: !has },
-        { label: 'JPEG로 내보내기…', onClick: dlg({ kind: 'export', format: 'jpeg' }), disabled: !has },
-        { label: 'WebP로 내보내기…', onClick: dlg({ kind: 'export', format: 'webp' }), disabled: !has },
+        {
+          label: '내보내기',
+          onClick: () => {},
+          disabled: !has,
+          submenu: [
+            { label: 'PNG…', shortcut: 'Ctrl+Shift+Alt+S', onClick: () => void exportPng() },
+            { label: 'JPEG…', onClick: dlg({ kind: 'export', format: 'jpeg' }) },
+            { label: 'WebP…', onClick: dlg({ kind: 'export', format: 'webp' }) },
+            'sep',
+            { label: '레이어를 각각 PNG로…', onClick: () => void exportLayers() },
+            { label: '선택 영역을 PNG로…', onClick: () => void exportSelection(), disabled: !hasSel }
+          ]
+        },
         'sep',
         { label: '닫기', shortcut: 'Ctrl+W', onClick: () => A.requestCloseTab(), disabled: !has },
         { label: '끝내기', shortcut: 'Alt+F4', onClick: () => A.requestQuit() }
@@ -296,8 +343,11 @@ export default function App(): JSX.Element {
         { label: '전경색으로 채우기', shortcut: 'Alt+Backspace', onClick: () => A.fill('fg'), disabled: !pixel },
         { label: '배경색으로 채우기', shortcut: 'Ctrl+Backspace', onClick: () => A.fill('bg'), disabled: !pixel },
         { label: '내용 인식 채우기', shortcut: 'Shift+F5', onClick: () => void A.contentAwareFill(), disabled: !pixel || !hasSel },
+        { label: '선 그리기…', onClick: dlg({ kind: 'stroke' }), disabled: !pixel || !hasSel },
         'sep',
-        { label: '자유 변형', shortcut: 'Ctrl+T', onClick: () => editor.setTool('move'), disabled: !has }
+        { label: '자유 변형', shortcut: 'Ctrl+T', onClick: () => editor.setTool('move'), disabled: !has },
+        'sep',
+        { label: '환경 설정…', shortcut: 'Ctrl+K', onClick: dlg({ kind: 'preferences' }) }
       ]
     },
     {
@@ -314,13 +364,28 @@ export default function App(): JSX.Element {
         { label: '캔버스 좌우 반전', onClick: () => A.flipCanvasCmd(true), disabled: !has },
         { label: '캔버스 상하 반전', onClick: () => A.flipCanvasCmd(false), disabled: !has },
         'sep',
-        { label: '레벨…', shortcut: 'Ctrl+L', onClick: dlg({ kind: 'adjust', tab: 'levels' }), disabled: !pixel },
-        { label: '커브…', shortcut: 'Ctrl+M', onClick: dlg({ kind: 'adjust', tab: 'curves' }), disabled: !pixel },
-        { label: '노출…', onClick: dlg({ kind: 'adjust', tab: 'exposure' }), disabled: !pixel },
-        { label: '색조/채도…', shortcut: 'Ctrl+U', onClick: dlg({ kind: 'adjust', tab: 'hsl' }), disabled: !pixel },
-        { label: '그레인·그라데이션 맵…', onClick: dlg({ kind: 'adjust', tab: 'effects' }), disabled: !pixel },
-        { label: '반전', shortcut: 'Ctrl+I', onClick: () => A.quickAdjust('invert'), disabled: !pixel },
-        { label: '채도 감소', shortcut: 'Ctrl+Shift+U', onClick: () => A.quickAdjust('desaturate'), disabled: !pixel },
+        {
+          label: '조정',
+          onClick: () => {},
+          disabled: !pixel,
+          submenu: [
+            { label: '레벨…', shortcut: 'Ctrl+L', onClick: dlg({ kind: 'adjust', tab: 'levels' }) },
+            { label: '커브…', shortcut: 'Ctrl+M', onClick: dlg({ kind: 'adjust', tab: 'curves' }) },
+            { label: '노출…', onClick: dlg({ kind: 'adjust', tab: 'exposure' }) },
+            'sep',
+            { label: '활기…', onClick: dlg({ kind: 'moreAdjust', which: 'vibrance' }) },
+            { label: '색조/채도…', shortcut: 'Ctrl+U', onClick: dlg({ kind: 'adjust', tab: 'hsl' }) },
+            { label: '색상 균형…', shortcut: 'Ctrl+B', onClick: dlg({ kind: 'moreAdjust', which: 'colorBalance' }) },
+            { label: '흑백…', shortcut: 'Ctrl+Shift+Alt+B', onClick: dlg({ kind: 'moreAdjust', which: 'blackWhite' }) },
+            'sep',
+            { label: '반전', shortcut: 'Ctrl+I', onClick: () => A.quickAdjust('invert') },
+            { label: '포스터화…', onClick: dlg({ kind: 'moreAdjust', which: 'posterize' }) },
+            { label: '한계값…', onClick: dlg({ kind: 'moreAdjust', which: 'threshold' }) },
+            { label: '그레인·그라데이션 맵…', onClick: dlg({ kind: 'adjust', tab: 'effects' }) },
+            'sep',
+            { label: '채도 감소', shortcut: 'Ctrl+Shift+U', onClick: () => A.quickAdjust('desaturate') }
+          ]
+        },
         'sep',
         { label: '자동 톤', shortcut: 'Ctrl+Shift+L', onClick: () => A.quickAdjust('color'), disabled: !pixel },
         { label: '자동 대비', shortcut: 'Ctrl+Shift+Alt+L', onClick: () => A.quickAdjust('contrast'), disabled: !pixel },
@@ -336,18 +401,38 @@ export default function App(): JSX.Element {
         { label: '레이어 삭제', onClick: A.deleteLayers, disabled: !selectedCount },
         { label: '이름 바꾸기…', onClick: () => active && editor.set({ dialog: { kind: 'rename', layerId: active.id } }), disabled: !active },
         'sep',
-        ...ADJUSTMENT_KINDS.map((k) => ({ label: `새 조정 레이어: ${k.label}`, onClick: () => A.newAdjustmentLayer(k.key), disabled: !has })),
+        { label: '새 조정 레이어', onClick: () => {}, disabled: !has, submenu: ADJUSTMENT_KINDS.map((k) => ({ label: `${k.label}…`, onClick: () => A.newAdjustmentLayer(k.key) })) },
         { label: '조정 설정 편집…', onClick: () => active && openAdjustmentEditor(active), disabled: active?.kind !== 'adjustment' },
         'sep',
-        { label: '레이어 효과…', onClick: () => active && editor.set({ dialog: { kind: 'effects', layerId: active.id } }), disabled: !pixel },
-        { label: active?.mask ? '마스크 편집' : '레이어 마스크 추가', shortcut: 'Q', onClick: () => A.addMask(), disabled: !active },
-        { label: '모두 가리는 마스크 추가', onClick: () => A.addMask(true), disabled: !active || !!active.mask },
-        { label: active?.mask?.enabled === false ? '마스크 켜기' : '마스크 끄기', onClick: A.toggleMaskEnabled, disabled: !active?.mask },
-        { label: '마스크 반전', onClick: A.invertMask, disabled: !active?.mask },
-        { label: '마스크 페더…', onClick: dlg({ kind: 'selectAmount', op: 'maskFeather' }), disabled: !active?.mask },
-        { label: '마스크 적용', onClick: () => A.deleteMask(true), disabled: !active?.mask || !active.bitmap },
-        { label: '마스크 삭제', onClick: () => A.deleteMask(false), disabled: !active?.mask },
-        { label: '마스크 편집 중', onClick: () => editor.set({ maskEditing: !maskEditing }), checked: maskEditing, disabled: !active?.mask },
+        {
+          label: '레이어 효과',
+          onClick: () => {},
+          disabled: !pixel,
+          submenu: [
+            { label: '효과 설정…', onClick: () => active && editor.set({ dialog: { kind: 'effects', layerId: active.id } }) },
+            'sep',
+            { label: '레이어 효과 복사', onClick: A.copyLayerStyle, disabled: !active?.effects },
+            { label: '레이어 효과 붙여넣기', onClick: A.pasteLayerStyle, disabled: !A.hasStyleClip() },
+            { label: '레이어 효과 지우기', onClick: A.clearLayerStyle, disabled: !active?.effects }
+          ]
+        },
+        {
+          label: '레이어 마스크',
+          onClick: () => {},
+          disabled: !active,
+          submenu: [
+            { label: active?.mask ? '마스크 편집' : '마스크 추가 (모두 보이기)', shortcut: 'Q', onClick: () => A.addMask() },
+            { label: '마스크 추가 (모두 가리기)', onClick: () => A.addMask(true), disabled: !!active?.mask },
+            'sep',
+            { label: '마스크 편집 중', onClick: () => editor.set({ maskEditing: !maskEditing }), checked: maskEditing, disabled: !active?.mask },
+            { label: active?.mask?.enabled === false ? '마스크 켜기' : '마스크 끄기', onClick: A.toggleMaskEnabled, disabled: !active?.mask },
+            { label: '마스크 반전', onClick: A.invertMask, disabled: !active?.mask },
+            { label: '마스크 페더…', onClick: dlg({ kind: 'selectAmount', op: 'maskFeather' }), disabled: !active?.mask },
+            'sep',
+            { label: '마스크 적용', onClick: () => A.deleteMask(true), disabled: !active?.mask || !active?.bitmap },
+            { label: '마스크 삭제', onClick: () => A.deleteMask(false), disabled: !active?.mask }
+          ]
+        },
         'sep',
         { label: active?.clip ? '클리핑 마스크 해제' : '클리핑 마스크 만들기', shortcut: 'Ctrl+Alt+G', onClick: A.toggleClip, disabled: !active },
         { label: '그룹 만들기', shortcut: 'Ctrl+G', onClick: A.group, disabled: !selectedCount },
@@ -358,7 +443,7 @@ export default function App(): JSX.Element {
         { label: selectedCount > 1 ? '레이어 병합' : '아래 레이어와 병합', shortcut: 'Ctrl+E', onClick: A.mergeDownCmd, disabled: !active },
         { label: '보이는 레이어 병합', shortcut: 'Ctrl+Shift+E', onClick: A.mergeVisible, disabled: !has },
         { label: '이미지 병합', onClick: A.flatten, disabled: !has },
-        { label: '문자 래스터화', onClick: A.rasterizeText, disabled: active?.kind !== 'text' }
+        { label: '래스터화 (픽셀로 바꾸기)', onClick: A.rasterizeText, disabled: active?.kind !== 'text' && !active?.shape }
       ]
     },
     {
@@ -368,16 +453,23 @@ export default function App(): JSX.Element {
         { label: '선택 해제', shortcut: 'Ctrl+D', onClick: A.deselect, disabled: !hasSel },
         { label: '선택 반전', shortcut: 'Ctrl+Shift+I', onClick: A.invertSelection, disabled: !has },
         { label: '레이어 픽셀 선택', onClick: () => active && A.selectLayerPixels(active.id), disabled: !active?.bitmap },
+        { label: '피사체 (AI)', onClick: () => void A.selectSubject(), disabled: !has },
         'sep',
         { label: '확장…', onClick: dlg({ kind: 'selectAmount', op: 'expand' }), disabled: !hasSel },
         { label: '축소…', onClick: dlg({ kind: 'selectAmount', op: 'contract' }), disabled: !hasSel },
-        { label: '페더…', shortcut: 'Shift+F6', onClick: dlg({ kind: 'selectAmount', op: 'feather' }), disabled: !hasSel }
+        { label: '페더…', shortcut: 'Shift+F6', onClick: dlg({ kind: 'selectAmount', op: 'feather' }), disabled: !hasSel },
+        { label: '매끄럽게…', onClick: dlg({ kind: 'selectAmount', op: 'smooth' }), disabled: !hasSel },
+        'sep',
+        { label: '가장자리 다듬기…', shortcut: 'Ctrl+Alt+R', onClick: dlg({ kind: 'refineEdge' }), disabled: !hasSel }
       ]
     },
     {
       label: '필터(T)',
       items: [
         { label: '흐림·노이즈·렌즈…', onClick: dlg({ kind: 'filters' }), disabled: !pixel },
+        { label: '선명하게 (언샤프 마스크·하이 패스)…', onClick: dlg({ kind: 'filters', focus: 'sharpen' }), disabled: !pixel },
+        { label: '모자이크·노이즈 감소…', onClick: dlg({ kind: 'filters', focus: 'other' }), disabled: !pixel },
+        'sep',
         { label: '배경 제거 (AI)…', onClick: dlg({ kind: 'removeBg' }), disabled: !pixel },
         { label: '내용 인식 채우기', shortcut: 'Shift+F5', onClick: () => void A.contentAwareFill(), disabled: !pixel || !hasSel }
       ]
@@ -391,26 +483,43 @@ export default function App(): JSX.Element {
         { label: '실제 크기 (100%)', shortcut: 'Ctrl+1', onClick: () => runCommand('actualSize'), disabled: !has },
         'sep',
         { label: '픽셀 격자 (확대 시)', shortcut: "Ctrl+'", onClick: () => editor.set({ showGrid: !showGrid }), checked: showGrid },
+        { label: '눈금자', shortcut: 'Ctrl+R', onClick: () => editor.setSettings({ showRulers: !settings.showRulers }), checked: settings.showRulers },
+        {
+          label: '안내선',
+          onClick: () => {},
+          submenu: [
+            { label: '안내선 보기', shortcut: 'Ctrl+;', onClick: () => editor.setSettings({ showGuides: !settings.showGuides }), checked: settings.showGuides },
+            { label: '안내선에 맞추기', shortcut: 'Ctrl+Shift+;', onClick: () => editor.setSettings({ snapGuides: !settings.snapGuides }), checked: settings.snapGuides },
+            { label: '안내선 잠그기', shortcut: 'Ctrl+Alt+;', onClick: () => editor.setSettings({ lockGuides: !settings.lockGuides }), checked: settings.lockGuides },
+            'sep',
+            { label: '새 안내선…', onClick: dlg({ kind: 'newGuide' }), disabled: !has },
+            { label: '안내선 모두 지우기', onClick: clearGuides, disabled: !doc?.guides || (!doc.guides.v.length && !doc.guides.h.length) }
+          ]
+        },
         'sep',
-        ...(Object.keys(SKINS) as SkinName[]).map((name) => ({
-          label: `스킨: ${SKIN_LABELS[name]}`,
-          onClick: () => {
-            applySkin(name)
-            setSkin(name)
-          },
-          checked: skin === name
-        }))
+        {
+          label: '스킨',
+          onClick: () => {},
+          submenu: (Object.keys(SKINS) as SkinName[]).map((name) => ({
+            label: SKIN_LABELS[name],
+            onClick: () => {
+              applySkin(name)
+              setSkin(name)
+            },
+            checked: skin === name
+          }))
+        }
       ]
     },
     {
       label: '도움말(H)',
-      items: [{ label: 'SH Compositor 정보…', onClick: dlg({ kind: 'about' }) }]
+      items: [{ label: '사용 설명서…', shortcut: 'F1', onClick: dlg({ kind: 'help' }) }, 'sep', { label: 'SH Compositor 정보…', onClick: dlg({ kind: 'about' }) }]
     }
   ]
 
   const info = toolInfo(tool)
   const zoom = tab?.view ? `${Math.round(tab.view.zoom * 1000) / 10}%` : '—'
-  const message = progress?.label ?? (maskEditing ? '마스크 편집 중 — 검정으로 칠하면 가리고 흰색이면 보입니다. (레이어 썸네일을 누르면 레이어로)' : (info?.hint ?? '준비'))
+  const message = progress?.label ?? (maskEditing ? '마스크 편집 중입니다. 검정으로 칠하면 가려지고 흰색으로 칠하면 보입니다. 레이어로 돌아가려면 레이어 썸네일을 누르세요.' : (info?.hint ?? '준비'))
   const panes: React.ReactNode[] = doc
     ? [
         <CursorPane key="cur" />,
@@ -440,8 +549,16 @@ export default function App(): JSX.Element {
           <Box sx={{ flex: 3, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <LayersPanel />
           </Box>
-          <Box sx={{ flex: 1, minHeight: 90, maxHeight: 240 }}>
-            <HistoryPanel />
+          <Box sx={{ height: 250, flexShrink: 0 }}>
+            <PanelTabs
+              id="lower"
+              tabs={[
+                { key: 'history', label: '작업 내역', render: () => <HistoryPanel /> },
+                { key: 'swatches', label: '견본', render: () => <SwatchesPanel /> },
+                { key: 'navigator', label: '내비게이터', render: () => <NavigatorPanel /> },
+                { key: 'histogram', label: '히스토그램', render: () => <HistogramPanel /> }
+              ]}
+            />
           </Box>
         </Box>
       </Box>
