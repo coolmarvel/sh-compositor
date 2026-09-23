@@ -6,7 +6,7 @@
  *    끝나면 그 탭이 그대로일 때만 커밋한다. 탭이 닫혔거나 문서가 바뀌었으면 결과를 버리고 알린다.
  */
 import { editor } from './store'
-import { type DocCommand } from '../../../application/commands'
+import { type DocCommand } from '../../../application/commands/index'
 import { CommandError } from '../../../application/errors'
 import type { Doc } from '@core/index'
 

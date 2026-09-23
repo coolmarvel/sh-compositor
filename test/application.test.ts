@@ -236,7 +236,7 @@ test('service imports PNG uploads, exports any retained revision and enforces li
   assert.equal(unpackProject(svc.readAsset(alice, proj.result!.artifact!.id).bytes).layers[0].opacity, 0.5)
   // 한도: 업로드 바이트·디코딩 픽셀·문서 수·형식
   assert.throws(() => svc.uploadAsset(alice, new Uint8Array(65 * 1024), {}), code('RESOURCE_LIMIT'))
-  assert.throws(() => svc.uploadAsset(alice, new TextEncoder().encode('GIF89a...'), {}), code('INVALID_INPUT'))
+  assert.throws(() => svc.uploadAsset(alice, new TextEncoder().encode('GIF89a...'), {}), code('UNSUPPORTED_CAPABILITY'))
   const huge = svc.uploadAsset(alice, encodePng(1000, 200, new Uint8Array(1000 * 200 * 4)), {})
   assert.throws(() => svc.importDocument(alice, { assetId: huge.id }), code('RESOURCE_LIMIT'))
   svc.createDocument(alice, { width: 2, height: 2 })

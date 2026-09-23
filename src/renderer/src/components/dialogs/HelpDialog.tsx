@@ -4,6 +4,7 @@ import Button from '@mui/material/Button'
 import { ClassicDialog } from './parts'
 import { ClassicTabs } from './tabs'
 import { TOOLS } from '../../tools'
+import { TOOL_CATALOG, TOOL_GROUPS, UNSUPPORTED_ON_SERVER } from '../../../../application/catalog'
 import { ui } from '../../theme'
 
 const { color, chrome, space, font, surface } = ui
@@ -15,12 +16,18 @@ interface Section {
   rows?: Row[]
   notes?: string[]
 }
-type TabKey = 'start' | 'tools' | 'select' | 'paint' | 'adjust' | 'layers' | 'view'
+type TabKey = 'start' | 'tools' | 'select' | 'paint' | 'adjust' | 'layers' | 'view' | 'mcp'
 
 /** 도구 설명(`tools/index.ts` desc)을 문장마다 한 줄로 */
 const sentences = (s: string): string[] => s.split(/(?<=\.)\s+/).filter(Boolean)
 
 const TOOL_ROWS: Row[] = TOOLS.map((t) => [t.shortcut.replace('·', ' / '), [t.label, ...sentences(t.desc)]])
+
+/** MCP 도구 표 — `application/catalog.ts` 를 그대로 (서버가 등록하는 도구와 같은 목록). 이름은 접두사 compositor_ 를 뗀다 */
+const MCP_SECTIONS: Section[] = TOOL_GROUPS.map((g) => ({
+  title: g.label,
+  rows: TOOL_CATALOG.filter((t) => t.group === g.key).map((t): Row => [t.name.replace(/^compositor_/, ''), [t.title, ...t.lines, `매개변수: ${t.params}`]])
+}))
 
 /** 사용 설명서 내용. 단축키는 `App.tsx onKey`·메뉴와 같아야 한다 (바꾸면 여기도) */
 const PAGES: Record<TabKey, Section[]> = {
@@ -214,6 +221,42 @@ const PAGES: Record<TabKey, Section[]> = {
         ['Ctrl+K', '환경 설정을 엽니다.']
       ]
     }
+  ],
+  mcp: [
+    {
+      title: 'MCP 로 AI 에게 편집 시키기',
+      notes: [
+        'MCP(Model Context Protocol)는 AI 프로그램이 다른 프로그램의 기능을 도구로 부르는 공개 표준입니다.',
+        'SH Compositor 서버를 켜 두면 Claude, ChatGPT, Cursor 처럼 MCP 를 지원하는 AI 가 아래 도구로 그림을 편집합니다.',
+        '서버는 이 프로그램과 별개로 실행하는 명령줄 프로그램이며 브라우저나 이 창이 없어도 돌아갑니다.',
+        '서버 문서는 이 창의 문서와 따로 있습니다. 파일(.shcomp, PSD, PNG)로 주고받습니다.'
+      ]
+    },
+    {
+      title: '연결하기',
+      rows: [
+        ['서버 만들기', ['프로젝트 폴더에서 npm run build:server 를 실행합니다.', 'out/server/index.mjs 가 서버입니다.']],
+        ['로컬 (stdio)', ['AI 프로그램이 서버를 직접 띄웁니다. 토큰이 필요 없습니다.', 'Claude Code: claude mcp add sh-compositor -- node <경로>/out/server/index.mjs --stdio']],
+        [
+          '원격 (HTTP)',
+          [
+            'SHC_TOKENS="이름:비밀(32자 이상)" npm run server 로 켭니다.',
+            '주소는 http://127.0.0.1:8787/mcp 이고 Authorization: Bearer 비밀 헤더를 붙입니다.',
+            'ChatGPT 처럼 인터넷 주소만 받는 클라이언트는 HTTPS 로 공개된 주소가 필요합니다.'
+          ]
+        ],
+        [
+          '작업 순서',
+          [
+            '문서 만들기 또는 파일 올려 가져오기 → layer_list 로 레이어 ID 확인 → 편집 도구 → export 로 결과 받기.',
+            '모든 변경 도구는 docId, expectedRevision, operationId 를 받습니다.',
+            'expectedRevision 이 다르면 REVISION_CONFLICT 로 거절되니 document_get 으로 다시 읽습니다.'
+          ]
+        ]
+      ]
+    },
+    { title: '서버에서 할 수 없는 것', notes: UNSUPPORTED_ON_SERVER },
+    ...MCP_SECTIONS.map((s) => ({ ...s, title: `도구: ${s.title} (이름 앞에 compositor_ 가 붙습니다)` }))
   ]
 }
 
@@ -224,7 +267,8 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'paint', label: '칠하기·고치기' },
   { key: 'adjust', label: '색 보정·필터' },
   { key: 'layers', label: '레이어' },
-  { key: 'view', label: '화면·파일' }
+  { key: 'view', label: '화면·파일' },
+  { key: 'mcp', label: 'MCP' }
 ]
 
 const LAST_TAB = 'sc.helpTab'

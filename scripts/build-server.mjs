@@ -16,14 +16,14 @@ const result = await build({
   target: 'node20',
   sourcemap: true,
   legalComments: 'linked',
-  // ag-psd 등 캔버스가 필요한 모듈은 서버 경로에서 import 하지 않는다 (application 은 core 의 순수 모듈만)
+  // PSD 는 core/doc/psd.ts 가 Node 에서 캔버스 스텁을 넣는다
   banner: { js: `// SH Compositor server ${pkg.version}\nimport { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);` },
   define: { 'process.env.SHC_VERSION': JSON.stringify(pkg.version) },
   logLevel: 'info'
 })
 
-// 서버 경로에 캔버스가 필요한 PSD 모듈이 들어오면 실패 (core/index 같은 모음 import 를 쓰면 딸려 온다 — ADR-0005)
-const bad = Object.keys(result.metafile.inputs).filter((f) => /core\/doc\/psd\.ts|node_modules\/ag-psd\/|node_modules\/react/.test(f))
+// 서버 번들에 React·렌더러 코드가 들어오면 실패 (ADR-0005). PSD 는 ag-psd 의 useImageData 로 캔버스 없이 동작한다
+const bad = Object.keys(result.metafile.inputs).filter((f) => /node_modules\/react|renderer\/src/.test(f))
 if (bad.length) {
   console.error('서버 번들에 들어오면 안 되는 모듈:', bad.join(', '))
   process.exit(1)

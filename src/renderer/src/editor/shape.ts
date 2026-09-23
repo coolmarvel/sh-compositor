@@ -2,43 +2,11 @@
  * 도형 레이어 — 모양 데이터(ShapeData)로 비트맵을 그린다. 크기를 바꾸거나 채우기·외곽선을 고치면 다시 그려서 또렷하다
  * (포토샵 모양 레이어의 단순판). 좌표: 비트맵 = 도형 크기 + 사방 여백(외곽선 절반 + 2px).
  */
-import { getLayer, updateLayer, type Bitmap, type Doc, type Layer, type ShapeData } from '@core/index'
+import { getLayer, updateLayer, type Doc, type Layer, type ShapeData } from '@core/index'
 
-export const shapePad = (d: ShapeData): number => Math.ceil((d.stroke || d.kind === 'line' ? d.strokeWidth : 0) / 2) + 2
-
-export function renderShape(d: ShapeData): Bitmap {
-  const pad = shapePad(d)
-  const w = Math.max(0, d.w)
-  const h = Math.max(0, d.h)
-  const cw = Math.max(1, Math.ceil(w + pad * 2))
-  const ch = Math.max(1, Math.ceil(h + pad * 2))
-  const cv = new OffscreenCanvas(cw, ch)
-  const g = cv.getContext('2d')!
-  g.lineWidth = d.strokeWidth
-  g.lineJoin = 'round'
-  g.lineCap = 'round'
-  g.beginPath()
-  if (d.kind === 'line') {
-    const up = d.dir === -1
-    g.moveTo(pad, up ? pad + h : pad)
-    g.lineTo(pad + w, up ? pad : pad + h)
-    g.strokeStyle = d.stroke ?? d.fill ?? '#000000'
-    g.stroke()
-  } else {
-    if (d.kind === 'ellipse') g.ellipse(pad + w / 2, pad + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
-    else if (d.kind === 'roundRect') g.roundRect(pad, pad, w, h, Math.min(d.radius, w / 2, h / 2))
-    else g.rect(pad, pad, w, h)
-    if (d.fill) {
-      g.fillStyle = d.fill
-      g.fill()
-    }
-    if (d.stroke && d.strokeWidth > 0) {
-      g.strokeStyle = d.stroke
-      g.stroke()
-    }
-  }
-  return { width: cw, height: ch, data: g.getImageData(0, 0, cw, ch).data }
-}
+// 래스터라이저는 core/shape.ts (서버와 같은 코드)
+export { shapePad, renderShape } from '@core/shape'
+import { shapePad, renderShape } from '@core/shape'
 
 /** 모양 데이터를 바꿔 다시 그린다 — 가운데·회전은 유지 */
 export function reshape(doc: Doc, id: string, patch: Partial<ShapeData>): Doc {

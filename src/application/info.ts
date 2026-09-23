@@ -26,10 +26,21 @@ export interface DocSummary {
   resolution: number
   layerCount: number
   activeLayerId: string | null
+  /** 선택 영역 경계 (없으면 null) */
+  selection: { x: number; y: number; w: number; h: number } | null
+  guides: { vertical: number[]; horizontal: number[] }
 }
 
 export function describeDoc(doc: Doc): DocSummary {
-  return { width: doc.width, height: doc.height, resolution: doc.resolution, layerCount: doc.layers.length, activeLayerId: doc.activeId }
+  return {
+    width: doc.width,
+    height: doc.height,
+    resolution: doc.resolution,
+    layerCount: doc.layers.length,
+    activeLayerId: doc.activeId,
+    selection: doc.selection?.bounds ?? null,
+    guides: { vertical: doc.guides?.v ?? [], horizontal: doc.guides?.h ?? [] }
+  }
 }
 
 /** 레이어 목록 — 배열 순서는 아래 → 위 (문서 모델과 같음) */

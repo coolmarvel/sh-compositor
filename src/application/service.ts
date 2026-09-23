@@ -12,13 +12,17 @@ import type { Doc } from '../core/doc/types'
 import { newDoc } from '../core/doc/ops'
 import { record, undo as hUndo, redo as hRedo, canUndo, canRedo, historyBytes } from '../core/doc/history'
 import { MAX_SIDE } from '../core/limits'
-import { COMMANDS, type CommandName } from './commands'
+import { COMMANDS, COMMAND_NAMES, type CommandName, type CommandContext } from './commands/index'
 import { CommandError, invalid, limit, notFound, toCommandError } from './errors'
 import { object, onlyKeys, int, num, str, oneOf, id, hex } from './validate'
 import { MemoryDocumentRepository, newToken, type DocumentRepository, type StoredDocument } from './repository'
 import { MemoryAssetStore, assetInfo, type Asset, type AssetInfo, type AssetStore } from './assets'
 import { InlineJobRunner, cancelled, type JobRunner, type Task, type TaskResult } from './jobs'
-import { importImage, pngSize, EXPORT_FORMATS, IMPORT_FORMATS, MEDIA_TYPES, type ExportFormat } from './codecs'
+import { importDocument, importBitmap, inspectUpload, EXPORT_FORMATS, IMPORT_FORMATS, MEDIA_TYPES, type ExportFormat } from './codecs'
+import { histogram, type Histogram } from '../core/adjust'
+import { flattenDoc } from '../core/doc/render'
+import { bakeLayer } from '../core/doc/pixels'
+import { getLayer } from '../core/doc/ops'
 import { describeDoc, describeLayers, type DocSummary, type LayerInfo } from './info'
 
 export type Scope = 'documents:read' | 'documents:write'
@@ -129,8 +133,6 @@ export interface ServiceOptions {
   now?: () => number
 }
 
-const COMMAND_NAMES: readonly CommandName[] = ['image.resize', 'image.crop', 'layer.update', 'filter.apply']
-
 export class DocumentService {
   readonly limits: ServiceLimits
   private repo: DocumentRepository
@@ -161,6 +163,7 @@ export class DocumentService {
       importFormats: IMPORT_FORMATS,
       exportFormats: EXPORT_FORMATS,
       coordinates: '문서 픽셀, 왼쪽 위 원점. 레이어 배열은 아래 → 위.',
+      unsupported: ['문자 레이어 만들기·편집 (서버에 글꼴·캔버스 없음)', 'AI 배경 제거·피사체 선택·개체 선택 (브라우저 전용 모델)', 'JPEG·WebP·HEIC·TIFF 가져오기/내보내기 (브라우저 디코더)'],
       resampling: ['bilinear'],
       limits: {
         maxUploadBytes: this.limits.maxUploadBytes,
@@ -223,16 +226,16 @@ export class DocumentService {
     return this.info(s)
   }
 
-  importDocument(p: Principal, raw: unknown): DocInfo {
+  importDocument(p: Principal, raw: unknown): DocInfo & { warnings: string[] } {
     this.need(p, 'documents:write')
     const o = object(raw)
     onlyKeys(o, ['assetId', 'name'])
     const asset = this.asset(p, id(o, 'assetId'))
     const name = str(o, 'name', 255, undefined) ?? asset.name.replace(/\.[^.]+$/, '')
     this.newDocSlot(p)
-    const doc = importImage(asset.bytes, name, this.limits.maxPixels)
+    const { doc, warnings } = importDocument(asset.bytes, name, this.limits.maxPixels)
     this.checkDoc(doc)
-    return this.info(this.repo.create(p.owner, name, doc, this.now(), this.limits.docTtlMs))
+    return { ...this.info(this.repo.create(p.owner, name, doc, this.now(), this.limits.docTtlMs)), warnings }
   }
 
   getDocument(p: Principal, raw: unknown): DocInfo {
@@ -242,6 +245,38 @@ export class DocumentService {
     return this.info(this.stored(p, id(o, 'docId')))
   }
 
+  listDocuments(p: Principal): DocInfo[] {
+    this.need(p, 'documents:read')
+    return this.repo
+      .listByOwner(p.owner)
+      .filter((s) => s.expiresAt > this.now())
+      .map((s) => this.info(s))
+  }
+  /** 이름 같은 메타데이터 — revision 을 올리지 않는다 */
+  renameDocument(p: Principal, raw: unknown): DocInfo {
+    this.need(p, 'documents:write')
+    const o = object(raw)
+    onlyKeys(o, ['docId', 'name'])
+    const s = this.stored(p, id(o, 'docId'))
+    const name = str(o, 'name', 255)
+    if (!name.trim()) throw invalid('name 은 비워 둘 수 없습니다.', { field: 'name' })
+    s.name = name.trim()
+    return this.info(s)
+  }
+  /** 히스토그램 — 레이어(문서 정렬로 구운 픽셀) 또는 합성 결과 */
+  getHistogram(p: Principal, raw: unknown): { docId: string; revision: number; layerId: string | null; histogram: Histogram } {
+    this.need(p, 'documents:read')
+    const o = object(raw)
+    onlyKeys(o, ['docId', 'layerId'])
+    const s = this.stored(p, id(o, 'docId'))
+    const doc = s.history.present
+    if (o.layerId === undefined) return { docId: s.id, revision: s.revision, layerId: null, histogram: histogram(flattenDoc(doc).data) }
+    const layerId = id(o, 'layerId')
+    const l = getLayer(doc, layerId)
+    if (!l) throw new CommandError('NOT_FOUND', '레이어를 찾을 수 없습니다.', { layerId })
+    if (!l.bitmap) throw invalid('픽셀이 없는 레이어입니다.', { layerId })
+    return { docId: s.id, revision: s.revision, layerId, histogram: histogram(getLayer(bakeLayer(doc, l.id), l.id)!.bitmap!.data) }
+  }
   listLayers(p: Principal, raw: unknown): { docId: string; revision: number; layers: LayerInfo[] } {
     this.need(p, 'documents:read')
     const o = object(raw)
@@ -266,10 +301,10 @@ export class DocumentService {
     if (bytes.byteLength > this.limits.maxUploadBytes) throw limit(`파일이 너무 큽니다 (한도 ${this.limits.maxUploadBytes.toLocaleString()}바이트).`, { maxUploadBytes: this.limits.maxUploadBytes })
     this.assetRoom(p, bytes.byteLength)
     const name = (meta.name ?? 'upload').replace(/[\u0000-\u001f\u007f/\\]/g, '_').slice(0, 255) || 'upload'
-    // 형식은 내용으로 판정한다 (선언한 mediaType 을 믿지 않는다). 지금은 PNG 만 받는다
-    pngSize(bytes)
+    // 형식은 내용으로 판정한다 (선언한 mediaType 을 믿지 않는다)
+    const { mediaType } = inspectUpload(bytes)
     const now = this.now()
-    return assetInfo(this.assets.put({ owner: p.owner, kind: 'upload', name, mediaType: 'image/png', bytes, createdAt: now, expiresAt: now + this.limits.assetTtlMs }))
+    return assetInfo(this.assets.put({ owner: p.owner, kind: 'upload', name, mediaType, bytes, createdAt: now, expiresAt: now + this.limits.assetTtlMs }))
   }
   private assetRoom(p: Principal, add: number): void {
     if (this.assets.bytesByOwner(p.owner) + add > this.limits.maxAssetBytesPerOwner)
@@ -297,9 +332,11 @@ export class DocumentService {
   startCommand(p: Principal, name: CommandName, raw: unknown): JobInfo {
     this.need(p, 'documents:write')
     const cmd = COMMANDS[name]
-    if (!cmd) throw new CommandError('UNSUPPORTED_CAPABILITY', `알 수 없는 명령입니다: ${name}`)
+    if (!cmd || !COMMAND_NAMES.includes(name)) throw new CommandError('UNSUPPORTED_CAPABILITY', `알 수 없는 명령입니다: ${name}`)
     const { docId, expectedRevision, operationId, rest } = this.envelope(raw)
     const input = cmd.parse(rest)
+    // 문서 밖 자원(업로드한 그림)은 서비스가 소유권을 확인하고 넘긴다 — 가벼운 명령만 (일꾼 스레드에는 없다)
+    const ctx: CommandContext = { loadImage: (assetId) => ({ bitmap: importBitmap(this.asset(p, assetId).bytes, this.limits.maxPixels), name: this.asset(p, assetId).name.replace(/\.[^.]+$/, '') }) }
     // 결과 크기를 미리 알면 계산 전에 막는다 (메모리를 먼저 쓰고 나서 거절하지 않게)
     const size = cmd.resultSize?.(input)
     if (size && size.width * size.height > this.limits.maxPixels)
@@ -310,7 +347,7 @@ export class DocumentService {
       const doc = s.history.present
       return this.enqueue(p, operationId, name, docId, async (signal) => {
         const runner = cmd.heavy ? this.runner : this.inline
-        const out = (await runner.run({ type: 'command', name, doc, input } as Task, signal)) as Extract<TaskResult, { type: 'command' }>
+        const out = (await runner.run({ type: 'command', name, doc, input, ...(cmd.heavy ? {} : { ctx }) } as Task, signal)) as Extract<TaskResult, { type: 'command' }>
         return this.commit(p, docId, expectedRevision, (h) => record(h, out.doc, out.label, this.historyLimits()), out.doc, out.summary, out.warnings, signal)
       })
     })
@@ -362,7 +399,7 @@ export class DocumentService {
           expiresAt: now + this.limits.assetTtlMs,
           source: { docId, revision: rev, format }
         })
-        return { docId, revision: rev, summary: `${format.toUpperCase()} ${out.bytes.byteLength.toLocaleString()}바이트`, warnings: [], artifact: assetInfo(artifact) }
+        return { docId, revision: rev, summary: `${format.toUpperCase()} ${out.bytes.byteLength.toLocaleString()}바이트`, warnings: out.warnings, artifact: assetInfo(artifact) }
       })
     })
   }

@@ -94,7 +94,7 @@ npm run e2e [-- A B …]  # 실제 앱 E2E 120건 — Xvfb 가상 화면에서 (
 npm run build:web      # 웹 로컬 편집기 → out/web (dev:web 5190 · preview:web 5191)
 npm run e2e:web        # 웹 E2E 15건 (헤드리스 Chromium, build:web 후)
 npm run build:server   # headless 서버·MCP → out/server/index.mjs (SHC_TOKENS=… npm run server · --stdio)
-npm run e2e:mcp        # 서버·MCP E2E 15건 (공식 SDK 클라이언트, build:server 후)
+npm run e2e:mcp        # 서버·MCP E2E 23건 (공식 SDK 클라이언트, 도구 51개 전부 호출, build:server 후)
 npm run perf           # 체감 성능 (PERF_SIZE=4000x3000 PERF_LAYERS=5 PERF_PROFILE=1)
 npm run audit -- <dir>  # 모든 대화상자·메뉴·도구 줄 스크린샷 (문구·줄바꿈 검수)
 npm run models       # AI 개체 선택 모델(SlimSAM q8 35MB)·ORT wasm → resources/sam (git 제외, dist:win 이 먼저 부름)
@@ -109,7 +109,7 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 - **GPU 거울**: `src/renderer/src/gl/GLRenderer.ts`·`shaders.ts` — CPU 합성 규칙을 그대로 따른다 (`docs/guides/rendering.md`)
 - 편집기 상태: `editor/store.ts`(탭·이력·도구 설정·대화상자, 탭별 `revision`·`commitTo`·`tabSignal`), 동작: `editor/actions.ts`(메뉴·단축키 공용), 픽셀 편집 규약: `core/doc/pixels.ts`(`editor/pixels.ts` 는 재수출)
   (`docs/guides/pixels.md`), 입출력: `editor/io.ts`, 배경 제거: `editor/bgremove.ts`(동적 import), 캔버스 명령 등록소: `editor/commands.ts`
-- **명령 계층(UI 독립)**: `src/application/` — `commands.ts`(parse/run: resize·crop·layer.update·filter.apply) · `service.ts`(owner·revision·operationId·job·한도) · `repository/assets/jobs/codecs/errors`. 편집기 연결 `editor/commandBridge.ts` (ADR-0005)
+- **명령 계층(UI 독립)**: `src/application/` — `commands/{image,layers,selection,pixels,adjust,filter,shape}.ts`(36 명령, parse/run) · `catalog.ts`(MCP 도구 51개 설명 = 사용 설명서 MCP 탭 SSOT) · `service.ts`(owner·revision·operationId·job·한도) · `codecs.ts`(PNG·PSD·shcomp) · `repository/assets/jobs/errors`. 편집기 연결 `editor/commandBridge.ts` (ADR-0005)
 - **웹·서버**: `renderer/src/platform/{index,web,idb}.ts`(window.api 브라우저 구현) · `vite.web.config.ts` · `src/server/{main,http,mcp,auth,config,workerRunner,taskWorker}.ts` (가이드 `docs/guides/web-mcp.md`)
 - 도구: `tools/{move,select,paint,misc}.ts` + 목록·단축키·설명 `tools/index.ts`
 - PSD: `core/doc/psd.ts`(ag-psd, 테스트 `test/psd.test.ts`) · 안내선 `editor/guides.ts`+`components/Rulers.tsx` · 도형 `editor/shape.ts` · 일꾼 `editor/{packWorker,bgremoveWorker,samWorker}.ts`
@@ -147,6 +147,7 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 - MCP SDK 는 1.30.0(프로토콜 2025-11-25) 고정. 오류 결과에 structuredContent 를 넣지 않는다 (클라이언트가 outputSchema 로 검사해 -32602).
 - `npx asar extract-file` 은 현재 폴더에 푼다 — 프로젝트 루트에서 `package.json` 을 뽑으면 덮어쓴다 (2026-09-22 사고). 임시 폴더에서 실행.
 - 새 빌드 산출물 폴더는 `build.files` 에서 빼는지 확인 (v1.1.0 첫 빌드가 out/web 을 실어 288MB).
+- 서버 번들 검사(`build-server.mjs`)는 React·렌더러만 막는다 — PSD 는 Node 에서 동작한다(ag-psd useImageData + 스텁). 렌더러 전용 API(OffscreenCanvas·document)는 core 에 넣지 않는다.
 - 서버 작업 기한은 커밋 직전에도 검사한다 — 부하·VM 정지로 타이머가 2초 늦게 깨어난 사례(2026-09-22 MCP E2E M12).
 
 ## 디자인 시스템 (클래식)
@@ -178,7 +179,8 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 
 - 구조 결정 `docs/adr/0005-application-layer.md`, 실행·환경 변수·도구 목록 `docs/guides/web-mcp.md`, 남은 단계 `docs/plans/0004-web-mcp.md` 상단 현황.
 - 이력은 단계 수 + 바이트 예산(`historyBudgetMB`, 공유 비트맵 한 번만 셈, 직전 1단계는 남김). Worker 요청은 `signal`(그 요청만)·`timeoutMs`(일꾼 종료).
-- 새 명령 = `application/commands.ts` parse/run → `COMMANDS` → `server/mcp.ts` 도구 → 단위·`e2e:mcp`. UI 에 같은 동작이 있으면 `runCommand` 로.
+- 새 명령 = `application/commands/*.ts` parse/run → `commands/index.ts` LIST → `catalog.ts` 도구 설명 → `server/mcp.ts` MUTATION_SCHEMAS(zod) → `test/commands.test.ts`(카탈로그·스키마·등록부 대조가 자동으로 잡는다)·`e2e/mcp.mjs` M23(모든 도구 호출 검사). UI 에 같은 동작이 있으면 `runCommand` 로.
+- 도형 래스터라이저는 `core/shape.ts` (편집기·서버 공용). `editor/shape.ts` 는 reshape 만.
 
 ## 실행 경로 검수 (v1.0.4)
 

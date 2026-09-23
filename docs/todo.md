@@ -1,7 +1,7 @@
 ---
 title: TODO
 created: 2026-09-21
-updated: 2026-09-22
+updated: 2026-09-23
 domain: development
 ---
 
@@ -17,13 +17,13 @@ domain: development
 
 ## P2 — 가까운 로드맵
 
-- [ ] MCP를 실제 AI 클라이언트(Claude Code·Claude 앱)에 연결해 도구 목록·호출·결과 링크 확인 (`docs/guides/web-mcp.md` 연결 예). 지금은 공식 SDK 클라이언트 E2E만
+- [ ] MCP를 ChatGPT(커넥터)·OpenAI Agents SDK·Cursor 등 Claude 외 클라이언트에 연결해 확인 (HTTPS 공개 주소 필요). Claude Code 는 2026-09-23 확인
 - [ ] 서버 운영 한도 실측 — 40MP·동시 2작업·스레드 힙 512MB 는 기본값. 큰 문서 필터·내보내기의 최대 메모리와 동시성으로 정해 `SHC_*` 로 (`src/server/config.ts`)
 - [ ] 서버 전체 메모리 예산 — 지금은 문서별 이력 예산·owner별 문서 수만 있고 프로세스 전체 상한은 없다. `resourceLimits` 는 ArrayBuffer(픽셀)를 막지 못한다
 - [ ] 서버 영속 저장소·다중 인스턴스 (지금은 메모리 `MemoryDocumentRepository`·`MemoryAssetStore` — 재시작하면 사라짐)
 - [ ] OAuth 인가 서버 연동 (지금은 정적 Bearer 토큰 + 보호 자원 메타데이터 공지만, `src/server/auth.ts`)
-- [ ] 서버 명령 확장: PSD·JPEG 가져오기(런타임 codec), 문자, 조정, 레이어 추가·삭제·순서 — application 명령 → MCP 도구 순서 (ADR-0005 결과 절)
-- [ ] 편집기의 나머지 동작을 application 명령으로 옮길지 판단 (지금은 이미지 크기·이름 바꾸기만 `runCommand`). 필터 대화상자는 여러 필터를 한 번에 거는 모양이라 그대로
+- [ ] 서버 명령 확장 남은 것: 문자 레이어(서버용 글꼴 래스터화 필요), JPEG·WebP 코덱(순수 JS 인코더 도입 판단), 스팟 복구 근접 일치 모드(난수 → seed), 원근 변형
+- [ ] 편집기의 나머지 동작을 application 명령으로 옮길지 판단 (명령은 36개 있으나 UI 가 `runCommand` 로 부르는 것은 이미지 크기·이름 바꾸기뿐 — 붓·리터칭은 UI 가 미리보기 세션이라 그대로)
 - [ ] 선택: 열려 있는 웹 탭 원격 조작(계획 0004 6단계) — 필요가 확인되면 페어링·권한 설계부터
 - [ ] 대형 PNG/PSD 열기와 선택/레이어 PNG 내보내기의 동기 연산을 Worker로 옮길지 추가 측정 (`editor/io.ts`). 이번 검수는 CPU 합성 비용과 저장 Worker 수명을 개선.
 

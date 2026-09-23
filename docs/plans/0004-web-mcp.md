@@ -1,7 +1,7 @@
 ---
 title: 보완 우선순위와 웹·외부 MCP 확장 계획
 created: 2026-09-22
-updated: 2026-09-22
+updated: 2026-09-23
 domain: development
 status: in-progress
 ---
@@ -16,8 +16,8 @@ status: in-progress
 - [x] 2단계: `src/application` 명령 계층, 편집기의 탭·revision 커밋(`commandBridge.ts`). 이미지 크기·이름 바꾸기를 명령으로 전환.
 - [x] 3단계: 웹 빌드·브라우저 어댑터·브라우저 E2E 15건.
 - [x] 4단계: headless 서버(PNG import → resize/crop/레이어/필터 → PNG·.shcomp export), 메모리 저장소, worker_threads.
-- [x] 5단계 MVP: MCP 16도구(stdio·Streamable HTTP), 정적 Bearer 토큰, 버전 충돌·operationId·job·자산 링크, SDK 클라이언트 E2E 15건.
-- [ ] 6단계 라이브 탭 연결, OAuth 인가 서버 연동, 영속 저장소·다중 인스턴스, 서버 PSD·문자·AI, 실제 AI 클라이언트 연결 확인 — todo P2.
+- [x] 5단계: MCP 51도구(stdio·Streamable HTTP) — 편집기의 순수 계산 기능 전부(문자·AI 제외), PNG·PSD·.shcomp 가져오기/내보내기, 정적 Bearer 토큰, 버전 충돌·operationId·job·자산 링크. SDK 클라이언트 E2E 23건 + Claude Code 실제 연결 확인(2026-09-23).
+- [ ] 6단계 라이브 탭 연결, OAuth 인가 서버 연동, 영속 저장소·다중 인스턴스, 서버 문자·AI, ChatGPT 등 다른 클라이언트 연결 확인 — todo P2.
 - 달라진 점: MCP 프로토콜은 SDK 1.30.0이 지원하는 **2025-11-25**로 고정했다 (본문의 2026-07-28 명세는 이 SDK에 없다). 도구에 실행 취소·다시 실행·삭제·base64 업로드(stdio용·작은 한도)를 더했다.
 
 사용자가 요청한 후속 설계안이다. 현재 구현은 [검수 가이드](../guides/code-review.md)가 기준이다. 아래 모듈·도구·계약은 별도 표시가 없으면 **미구현 제안**이다. 기존 [brief](../brief.md)의 Windows 오프라인 편집기를 유지하면서 웹·외부 자동화로 확장한다. 계정·클라우드 저장·협업 전체를 이번 요청으로 구현하거나 배포하지 않는다. 구조를 채택하는 시점에 ADR을 작성한다.

@@ -7,7 +7,7 @@ import { bakeLayer, adjustLayer, editPixels } from '../editor/pixels'
 import { encodeJpeg, encodeWebp, mergedBitmap, saveProject } from '../editor/io'
 import { clearSessionRecovery } from '../editor/autosave'
 import { runCommand, capture, land } from '../editor/commandBridge'
-import { resizeCommand, layerUpdateCommand } from '../../../application/commands'
+import { resizeCommand, layerUpdateCommand } from '../../../application/commands/index'
 import { unpackProject } from '@core/index'
 import {
   getLayer,

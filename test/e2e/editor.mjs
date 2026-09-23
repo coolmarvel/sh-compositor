@@ -1567,7 +1567,7 @@ groups.L = async () => {
     await page.keyboard.press('F1')
     const dlg = page.getByRole('dialog')
     await dlg.waitFor()
-    for (const name of ['시작하기', '도구', '선택', '칠하기·고치기', '색 보정·필터', '레이어', '화면·파일']) {
+    for (const name of ['시작하기', '도구', '선택', '칠하기·고치기', '색 보정·필터', '레이어', '화면·파일', 'MCP']) {
       await dlg.getByRole('tab', { name, exact: true }).click()
       const r = await dlg.getByRole('tabpanel').evaluate((el) => ({ n: el.innerText.length, over: el.scrollWidth - el.clientWidth }))
       assert(r.n > 80 && r.over <= 0, `${name} ${JSON.stringify(r)}`)

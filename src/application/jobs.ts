@@ -5,12 +5,12 @@
  * CPU 계산을 async 로 감싸는 것만으로는 이벤트 루프가 분리되지 않는다 (plans/0004 §5).
  */
 import type { Doc } from '../core/doc/types'
-import { COMMANDS, type CommandOutput } from './commands'
+import { COMMANDS, type CommandOutput, type CommandContext } from './commands/index'
 import { exportDoc, type ExportFormat } from './codecs'
 import { CommandError } from './errors'
 
-export type Task = { type: 'command'; name: string; doc: Doc; input: unknown } | { type: 'export'; doc: Doc; format: ExportFormat }
-export type TaskResult = ({ type: 'command' } & CommandOutput) | { type: 'export'; bytes: Uint8Array; mediaType: string }
+export type Task = { type: 'command'; name: string; doc: Doc; input: unknown; ctx?: CommandContext } | { type: 'export'; doc: Doc; format: ExportFormat }
+export type TaskResult = ({ type: 'command' } & CommandOutput) | { type: 'export'; bytes: Uint8Array; mediaType: string; warnings: string[] }
 
 export interface JobRunner {
   run(task: Task, signal: AbortSignal): Promise<TaskResult>
@@ -22,7 +22,7 @@ export function executeTask(task: Task): TaskResult {
   if (task.type === 'export') return { type: 'export', ...exportDoc(task.doc, task.format) }
   const cmd = COMMANDS[task.name]
   if (!cmd) throw new CommandError('UNSUPPORTED_CAPABILITY', `알 수 없는 명령입니다: ${task.name}`)
-  return { type: 'command', ...cmd.run(task.doc, task.input) }
+  return { type: 'command', ...cmd.run(task.doc, task.input, task.ctx) }
 }
 
 /**

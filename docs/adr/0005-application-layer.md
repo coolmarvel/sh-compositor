@@ -20,7 +20,7 @@ Accepted (v1.1.0). 계획 [0004](../plans/0004-web-mcp.md) 1~5단계를 MVP 범�
 ## 결정
 
 1. **`src/application/`** = UI·플랫폼과 독립된 문서 명령 계층. React·전역 `editor`·`window.api`·대화상자를 import하지 않는다.
-   - `commands.ts`: `parse(raw)`(문서를 보지 않는 입력 검증) + `run(doc, input)`(새 Doc). `image.resize`·`image.crop`·`layer.update`·`filter.apply`.
+   - `commands/*.ts`: `parse(raw)`(문서를 보지 않는 입력 검증) + `run(doc, input, ctx?)`(새 Doc). v1.1.1 부터 36개 — 이미지·레이어·선택·픽셀(붓·그라데이션·리터칭·복제·복구·도형)·보정·필터. 등록부 `commands/index.ts`, 도구 설명 `catalog.ts`.
    - `service.ts`: 서버용 진입점. Principal(owner·scope), `docId`·`expectedRevision`·`operationId`, 작업(job) 큐·기한·취소, 보관 기간, 한도.
    - `repository.ts`·`assets.ts`·`jobs.ts`: 문서 저장소(버전 비교 커밋), 자산 저장소, 작업 실행기 계약. 메모리 구현만 있다.
    - `errors.ts`: 오류 코드 9종 (`INVALID_INPUT`·`NOT_FOUND`·`FORBIDDEN`·`REVISION_CONFLICT`·`RESOURCE_LIMIT`·`CANCELLED`·`TIMEOUT`·`UNSUPPORTED_CAPABILITY`·`INTERNAL`).
@@ -50,4 +50,4 @@ Accepted (v1.1.0). 계획 [0004](../plans/0004-web-mcp.md) 1~5단계를 MVP 범�
 - 웹 로컬 편집기(`npm run build:web`)와 headless 서버·MCP(`npm run build:server`)를 같은 core·application으로 만든다. 설치본(Electron)에는 서버 코드가 들어가지 않는다.
 - 서버 문서·자산은 **메모리에만** 있다. 프로세스를 다시 띄우면 사라진다. 영속 저장소·다중 인스턴스·OAuth 인가 서버 연동·라이브 탭 조작은 구현하지 않았다 (todo P2).
 - 명령을 추가할 때: `commands.ts`에 parse/run → `COMMANDS`·`CommandName` 등록 → MCP 도구(`server/mcp.ts`) → 단위·MCP E2E. 편집기 UI가 같은 동작을 가지면 `runCommand`로 바꾼다.
-- 계약 위반을 막는 규칙: application에서 `window`·`editor`·React를 import하지 않는다. 서버 코드에서 `core/doc/psd.ts`(캔버스 필요)를 import하지 않는다. core 안에서도 `core/index` 모음 import를 쓰면 psd가 딸려 온다 — `scripts/build-server.mjs`가 번들에 psd·ag-psd·React가 들어오면 실패시킨다.
+- 계약 위반을 막는 규칙: application에서 `window`·`editor`·React를 import하지 않는다. `scripts/build-server.mjs`가 번들에 React·렌더러 코드가 들어오면 실패시킨다. PSD 는 ag-psd 의 `useImageData` + 캔버스 스텁으로 Node 에서 동작해 v1.1.1 부터 서버가 가져오기·내보내기 한다. 도형은 `core/shape.ts` 순수 래스터라이저(편집기와 공유). 렌더러 전용 API(OffscreenCanvas·document)는 core 에 넣지 않는다.

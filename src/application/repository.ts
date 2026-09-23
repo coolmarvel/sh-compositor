@@ -27,6 +27,7 @@ export interface DocumentRepository {
   docAt(id: string, revision: number): Doc | null
   delete(id: string): boolean
   countByOwner(owner: string): number
+  listByOwner(owner: string): StoredDocument[]
   /** 만료된 문서를 지우고 그 ID 들을 돌려준다 */
   sweep(now: number): string[]
 }
@@ -72,9 +73,10 @@ export class MemoryDocumentRepository implements DocumentRepository {
     return this.docs.delete(id)
   }
   countByOwner(owner: string): number {
-    let n = 0
-    for (const d of this.docs.values()) if (d.owner === owner) n++
-    return n
+    return this.listByOwner(owner).length
+  }
+  listByOwner(owner: string): StoredDocument[] {
+    return [...this.docs.values()].filter((d) => d.owner === owner)
   }
   sweep(now: number): string[] {
     const gone: string[] = []
