@@ -5,7 +5,9 @@
  */
 type Req = { id: number; png: Uint8Array; engine: 'offline' | 'online'; model?: 'isnet_fp16' | 'isnet'; publicPath: string }
 
-self.onmessage = async (e: MessageEvent<Req>) => {
+self.onmessage = async (e: MessageEvent<Req | { cancel: number }>) => {
+  // 취소 알림: 추론 중간에는 멈출 수 없다. 호출측이 결과를 버린다
+  if ('cancel' in e.data) return
   const { id, png, engine, model, publicPath } = e.data
   const post = (m: unknown, t?: Transferable[]): void => (self as unknown as Worker).postMessage(m, t ?? [])
   const progress = (key: string, current: number, total: number): void => post({ id, progress: { key, current, total } })

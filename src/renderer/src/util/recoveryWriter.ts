@@ -10,9 +10,11 @@ export class RecoveryWriter<T extends object> {
   private written = new Map<string, T>()
   private active: Promise<void> | null = null
   private closed = false
+  /** 종료하면 돌고 있는 인코딩을 그만 기다린다 (쓰기는 끝까지 기다린다 — 반쯤 쓴 복구본을 남기지 않게) */
+  private readonly stop = new AbortController()
   constructor(
     private snapshots: () => RecoverySnapshot<T>[],
-    private pack: (doc: T) => Promise<Uint8Array>,
+    private pack: (doc: T, signal: AbortSignal) => Promise<Uint8Array>,
     private write: (snapshot: RecoverySnapshot<T>, bytes: Uint8Array) => Promise<void>,
     private clear: (id: string) => Promise<void>
   ) {}
@@ -37,7 +39,7 @@ export class RecoveryWriter<T extends object> {
           continue
         }
         if (this.written.get(snapshot.id) === snapshot.doc) continue
-        const bytes = await this.pack(snapshot.doc)
+        const bytes = await this.pack(snapshot.doc, this.stop.signal)
         const current = this.snapshots().find((t) => t.id === snapshot.id)
         if (this.closed || !current?.dirty) continue
         await this.write(snapshot, bytes)
@@ -60,6 +62,7 @@ export class RecoveryWriter<T extends object> {
   }
   async shutdown(): Promise<void> {
     this.closed = true
+    this.stop.abort()
     await this.active
     for (const id of this.written.keys()) {
       try {

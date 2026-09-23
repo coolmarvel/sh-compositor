@@ -31,6 +31,7 @@
   "include": [
     "src/renderer/**/*",
     "src/preload/**/*.d.ts",
-    "src/core/**/*"
+    "src/core/**/*",
+    "src/application/**/*"
   ]
 }

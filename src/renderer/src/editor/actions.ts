@@ -5,6 +5,7 @@
 import { editor } from './store'
 import { bakeLayer, editPixels, fillSelection, eraseSelection, adjustLayer, layerViaCopy, selWeight, pixelsLocked } from './pixels'
 import { copyToClipboard, mergedBitmap } from './io'
+import { capture, land, currentDoc } from './commandBridge'
 import {
   getLayer,
   updateLayer,
@@ -267,7 +268,8 @@ export async function contentAwareFill(): Promise<void> {
   if (!d) return
   if (!d.selection?.bounds) return editor.toast('info', '채울 영역을 먼저 선택하세요.')
   const l = pixelLayer(d, '내용 인식 채우기')
-  if (!l) return
+  const at = capture()
+  if (!l || !at) return
   await editor.busy('내용 인식 채우기…', () => {
     // 선택을 한 번에 채우려면 레이어가 캔버스 전체를 덮어야 한다
     const out = editPixels(d, l.id, 'layer', { x: 0, y: 0, w: d.width, h: d.height }, (px, w, h, ox, oy) => {
@@ -276,7 +278,7 @@ export async function contentAwareFill(): Promise<void> {
       // 채울 곳은 원본으로 쓰지 않는다
       if (!contentFill(px, target, w, h)) throw new Error('원본으로 쓸 불투명 픽셀이 없습니다.')
     })
-    editor.commit({ ...out, selection: d.selection }, '내용 인식 채우기')
+    land(at, { ...out, selection: d.selection }, '내용 인식 채우기')
   })
 }
 
@@ -285,12 +287,18 @@ export async function removeBackground(refine: MatteRefine | null, opts: BgOptio
   const d = doc()
   if (!d) return
   const l = pixelLayer(d, '배경 제거')
-  if (!l) return
+  const at = capture()
+  if (!l || !at) return
   await editor.busy('배경 제거 준비 중…', async () => {
     const baked = bakeLayer(d, l.id)
     const b = getLayer(baked, l.id)!
     const { subjectMask } = await import('./bgremove')
-    const mask = await subjectMask(b.bitmap!, refine, opts, (label, value) => editor.set({ progress: { label, value } }))
+    // 탭을 닫으면 그 탭을 위한 추론을 그만 기다린다
+    const mask = await subjectMask(b.bitmap!, refine, opts, (label, value) => editor.set({ progress: { label, value } }), at.signal).catch((e) => {
+      if (at.signal.aborted) return null
+      throw e
+    })
+    if (!mask) return
     const data = new Uint8ClampedArray(mask.length * 4)
     const old = b.mask?.bitmap.data
     for (let i = 0; i < mask.length; i++) {
@@ -298,7 +306,7 @@ export async function removeBackground(refine: MatteRefine | null, opts: BgOptio
       data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = v
       data[i * 4 + 3] = 255
     }
-    editor.commit(updateLayer(baked, l.id, { mask: { bitmap: { width: b.bitmap!.width, height: b.bitmap!.height, data }, enabled: true, linked: true } }), '배경 제거')
+    if (!land(at, updateLayer(baked, l.id, { mask: { bitmap: { width: b.bitmap!.width, height: b.bitmap!.height, data }, enabled: true, linked: true } }), '배경 제거')) return
     editor.toast('ok', `배경을 레이어 마스크로 가렸습니다 (${opts.engine === 'online' ? '온라인 최신 모델' : '내장 모델'}). 마스크를 칠해 다듬을 수 있습니다.`)
   })
 }
@@ -309,7 +317,8 @@ export async function removeBackground(refine: MatteRefine | null, opts: BgOptio
  */
 export async function applyCanvasSize(o: CanvasSizeOptions): Promise<void> {
   const d = doc()
-  if (!d) return
+  const at = capture()
+  if (!d || !at) return
   const t = canvasTarget(d.width, d.height, o)
   if (t.width === d.width && t.height === d.height) return
   let next = resizeCanvas(d, t.width, t.height, o.anchor)
@@ -341,7 +350,7 @@ export async function applyCanvasSize(o: CanvasSizeOptions): Promise<void> {
     if (content) await editor.busy('내용 인식으로 여백 채우는 중…', run)
     else run()
   }
-  editor.commit(next, '캔버스 크기')
+  land(at, next, '캔버스 크기')
 }
 
 /** 배경 제거 대화상자에서 고른 엔진 방식 (자동·내장·최신) → 이번에 쓸 엔진. 최신 전용인데 연결이 없으면 null */
@@ -366,17 +375,24 @@ async function pickEngine(): Promise<'offline' | 'online' | null> {
 export async function selectSubject(): Promise<void> {
   const d = doc()
   if (!d) return
+  const at = capture()
+  if (!at) return
   const engine = await pickEngine()
   if (!engine) return
   await editor.busy('피사체 찾는 중…', async () => {
     const flat = mergedBitmap(d)
     const { subjectMask } = await import('./bgremove')
-    const mask = await subjectMask(flat, { refine: 8, shift: 0, contrast: 30 }, { engine }, (label, value) => editor.set({ progress: { label, value } }))
+    const mask = await subjectMask(flat, { refine: 8, shift: 0, contrast: 30 }, { engine }, (label, value) => editor.set({ progress: { label, value } }), at.signal).catch((e) => {
+      if (at.signal.aborted) return null
+      throw e
+    })
+    if (!mask) return
     const sel = makeSelection(d.width, d.height, mask)
-    const cur = editor.doc
-    if (!cur) return
     if (!sel?.bounds) return editor.toast('info', '피사체를 찾지 못했습니다.')
-    editor.commit({ ...cur, selection: sel }, '피사체 선택')
+    // 선택만 바꾸는 결과라 그사이 픽셀 편집이 있었어도 그 탭의 지금 문서에 얹는다 (크기가 같을 때만)
+    const cur = currentDoc(at)
+    if (!cur || cur.width !== d.width || cur.height !== d.height) return
+    land({ ...at, revision: editor.revisionOf(at.tabId)! }, { ...cur, selection: sel }, '피사체 선택')
   })
 }
 

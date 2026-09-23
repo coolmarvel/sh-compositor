@@ -6,7 +6,21 @@
  * 문서 변경은 전부 `commit(doc, label)` 을 거쳐 실행취소 이력에 쌓인다.
  */
 import { useSyncExternalStore } from 'react'
-import { startHistory, record, replace, silent, undo as hUndo, redo as hRedo, DEFAULT_BRUSH, type History, type Doc, type BrushSettings, type Anchor, type MoreAdjustKind } from '../../../core/index'
+import {
+  startHistory,
+  record,
+  replace,
+  silent,
+  undo as hUndo,
+  redo as hRedo,
+  HISTORY_BUDGET_MB,
+  DEFAULT_BRUSH,
+  type History,
+  type Doc,
+  type BrushSettings,
+  type Anchor,
+  type MoreAdjustKind
+} from '../../../core/index'
 import type { View } from '../gl/GLRenderer'
 import { adaptView } from './view'
 
@@ -25,7 +39,13 @@ export interface Tab {
   view: View | null
   /** 작업 내역 스냅샷 (이름 붙은 지점 — 실행취소 한도와 상관없이 남는다) */
   snapshots: { id: string; name: string; doc: Doc }[]
+  /** 이력에 남는 변경(기록·실행취소·다시 실행·끌기)마다 1씩 — 오래 걸린 작업이 요청 당시 문서에만 커밋되게 (ADR-0005).
+   *  활성 레이어 바꾸기 같은 `quiet` 변화는 올리지 않는다 (레이어를 한 번 눌렀다고 배경 제거 결과를 버리지 않게) */
+  revision: number
 }
+
+/** 요청 당시 탭·문서에 묶인 커밋의 결과 */
+export type CommitOutcome = 'ok' | 'closed' | 'conflict'
 
 export interface ToolSettings {
   marqueeKind: 'rect' | 'ellipse'
@@ -71,6 +91,8 @@ export interface ToolSettings {
   // 환경 설정
   /** 실행취소 단계 수 */
   historyLimit: number
+  /** 탭 하나의 실행취소 이력이 붙잡는 픽셀 메모리 상한(MB) — 넘으면 오래된 단계부터 지운다 */
+  historyBudgetMB: number
   /** 자동 저장 간격(분), 0 = 끔 */
   autosaveMinutes: number
   /** 끄는 동안 화면 해상도를 낮춰 빠르게 (느린 PC·GPU 없는 환경) */
@@ -117,6 +139,7 @@ export const DEFAULT_SETTINGS: ToolSettings = {
   snapGuides: true,
   lockGuides: false,
   historyLimit: 80,
+  historyBudgetMB: HISTORY_BUDGET_MB,
   autosaveMinutes: 1,
   fastInteract: true
 }
@@ -224,16 +247,42 @@ export class EditorStore {
     return this.tab?.history.present ?? null
   }
 
-  private patchTab(id: string, patch: Partial<Tab>): void {
-    this.set({ tabs: this.state.tabs.map((t) => (t.id === id ? withView({ ...t, ...patch }) : t)) })
+  private patchTab(id: string, patch: Partial<Tab>, bump = true): void {
+    this.set({
+      tabs: this.state.tabs.map((t) => {
+        if (t.id !== id) return t
+        const next = { ...t, ...patch }
+        if (bump && patch.history && patch.history.present !== t.history.present) next.revision = t.revision + 1
+        return withView(next)
+      })
+    })
+  }
+  private limits(): { limit: number; budgetBytes: number } {
+    const s = this.state.settings
+    return { limit: s.historyLimit, budgetBytes: Math.max(1, s.historyBudgetMB) * 1024 * 1024 }
   }
 
-  addTab(doc: Doc, name: string, path: string | null = null, label = '열기'): void {
-    const t: Tab = { id: tabId(), name, path, history: startHistory(doc, label), saved: path ? doc : null, view: null, snapshots: [] }
+  addTab(doc: Doc, name: string, path: string | null = null, label = '열기'): string {
+    const t: Tab = { id: tabId(), name, path, history: startHistory(doc, label), saved: path ? doc : null, view: null, snapshots: [], revision: 0 }
     this.set({ tabs: [...this.state.tabs, t], activeTabId: t.id, selectedIds: doc.activeId ? [doc.activeId] : [], maskEditing: false })
+    return t.id
+  }
+
+  /** 탭별 취소 신호 — 탭을 닫으면 그 탭을 위해 돌던 배경 제거·인코딩 등을 그만 기다린다 */
+  private aborts = new Map<string, AbortController>()
+  tabSignal(id: string): AbortSignal {
+    let c = this.aborts.get(id)
+    if (!c) {
+      c = new AbortController()
+      if (!this.state.tabs.some((t) => t.id === id)) c.abort()
+      else this.aborts.set(id, c)
+    }
+    return c.signal
   }
 
   closeTab(id: string): void {
+    this.aborts.get(id)?.abort()
+    this.aborts.delete(id)
     const i = this.state.tabs.findIndex((t) => t.id === id)
     const tabs = this.state.tabs.filter((t) => t.id !== id)
     const next = this.state.activeTabId === id ? (tabs[Math.min(i, tabs.length - 1)]?.id ?? null) : this.state.activeTabId
@@ -266,8 +315,24 @@ export class EditorStore {
   commit(doc: Doc, label: string): void {
     const t = this.tab
     if (!t) return
-    this.patchTab(t.id, { history: record(t.history, doc, label, this.state.settings.historyLimit) })
+    this.patchTab(t.id, { history: record(t.history, doc, label, this.limits()) })
     this.syncSelected()
+  }
+  /** 탭의 현재 리비전 (탭이 없으면 null) */
+  revisionOf(tabId: string): number | null {
+    return this.state.tabs.find((t) => t.id === tabId)?.revision ?? null
+  }
+  /**
+   * 요청 당시 탭·리비전에 커밋 — 오래 걸린 작업(배경 제거·내용 인식 등)이 끝났을 때 쓴다.
+   * 그사이 탭이 닫혔으면 'closed', 문서가 바뀌었으면 'conflict' 로 결과를 버린다 (다른 탭·새 편집을 덮지 않는다).
+   */
+  commitTo(tabId: string, expectedRevision: number, doc: Doc, label: string): CommitOutcome {
+    const t = this.state.tabs.find((x) => x.id === tabId)
+    if (!t) return 'closed'
+    if (t.revision !== expectedRevision) return 'conflict'
+    this.patchTab(t.id, { history: record(t.history, doc, label, this.limits()) })
+    if (t.id === this.state.activeTabId) this.syncSelected()
+    return 'ok'
   }
   /**
    * 끄는 동안(제스처)의 변경 — 첫 번은 새 칸, 이후는 그 칸을 덮어쓴다. `endGesture()` 로 끝낸다.
@@ -276,7 +341,7 @@ export class EditorStore {
   commitGesture(doc: Doc, label: string): void {
     const t = this.tab
     if (!t) return
-    const history = this.gestureOpen ? replace(t.history, doc, label) : record(t.history, doc, label, this.state.settings.historyLimit)
+    const history = this.gestureOpen ? replace(t.history, doc, label, this.limits()) : record(t.history, doc, label, this.limits())
     this.gestureOpen = true
     this.patchTab(t.id, { history })
   }
@@ -288,7 +353,7 @@ export class EditorStore {
   quiet(doc: Doc): void {
     const t = this.tab
     if (!t) return
-    this.patchTab(t.id, { history: silent(t.history, doc) })
+    this.patchTab(t.id, { history: silent(t.history, doc) }, false)
     this.syncSelected()
   }
   undo(): void {

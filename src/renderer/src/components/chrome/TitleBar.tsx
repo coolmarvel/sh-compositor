@@ -93,9 +93,10 @@ export default function TitleBar({ title = 'SH Compositor', subtitle }: { title?
         )}
       </Box>
       <Box sx={{ display: 'flex', height: '100%', WebkitAppRegion: 'no-drag' }} onDoubleClick={(e) => e.stopPropagation()}>
-        {ctl('min', () => void window.api.win?.minimize(), '최소화')}
-        {ctl('max', () => void window.api.win?.toggleMaximize().then(setMaximized), maximized ? '이전 크기로' : '최대화')}
-        {ctl('close', () => void window.api.win?.close(), '닫기')}
+        {/* 웹: 창을 닫거나 최소화할 수 없다 — 전체 화면 전환만 */}
+        {window.api.platform !== 'web' && ctl('min', () => void window.api.win?.minimize(), '최소화')}
+        {ctl('max', () => void window.api.win?.toggleMaximize().then(setMaximized), maximized ? '이전 크기로' : window.api.platform === 'web' ? '전체 화면' : '최대화')}
+        {window.api.platform !== 'web' && ctl('close', () => void window.api.win?.close(), '닫기')}
       </Box>
     </Box>
   )

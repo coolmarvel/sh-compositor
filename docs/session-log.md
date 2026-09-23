@@ -12,6 +12,43 @@ domain: development
 
 블록 형식: `## YYYY-MM-DD — 제목` 아래에 **요청/피드백 → 수정 → 검증 → 다음** 순서로 간결하게.
 
+## 2026-09-22 — v1.1.0 명령 계층·웹 로컬 편집기·headless 서버·MCP (계획 0004 1~5단계)
+
+**요청**: Codex 인계(handoff·plans/0004)를 받아 이어서 진행. 범위를 묻자 "한 번에 다 해줘". 도중에 **1.1.0 으로 올리자**(사용자 선언), 끝나면 E2E·Playwright 검증 후 인스톨러.
+
+**수정**
+- 안정성: `workerClient` 요청별 `signal`(그 요청만 취소, 늦은 답 버림)·`timeoutMs`(일꾼 종료), `SharedJob`(공유 인코딩은 소비자 모두 떠나야 취소), 자동 저장 종료 시 인코딩 취소.
+  이력 바이트 예산 `core/doc/history.ts`(공유 버퍼 한 번만 셈, 직전 1단계 유지), 환경 설정 "실행 취소 메모리"(기본 1024MB)·작업 내역 패널 MB 표시.
+- 버그: 배경 제거·피사체 선택·내용 인식·캔버스 크기·필터·가져오기가 await 뒤 **활성 탭**에 커밋 → 작업 중 탭을 바꾸면 다른 탭에 들어감.
+  `Tab.revision`·`commitTo`·`tabSignal` + `editor/commandBridge.ts capture/land` 로 시작한 탭·revision 에만 커밋, 바뀌었으면 버리고 알림. 탭을 닫으면 그 탭의 추론을 그만 기다림.
+- 명령 계층 `src/application/`(commands·service·repository·assets·jobs·codecs·errors·validate), `editor/pixels.ts` → `core/doc/pixels.ts`. 이미지 크기·이름 바꾸기가 명령 경유. ADR-0005.
+- 웹: `platform/{index,web,idb}.ts`(File System Access/다운로드, IndexedDB 복구·용량 초과 알림, Clipboard, 전체 화면, 떠나기 확인), `vite.web.config.ts`, 모델 복사 `scripts/web-assets.cjs`. 웹에서 창 닫기·최소화·끝내기 숨김.
+- 서버: `src/server/`(HTTP 업로드·다운로드·/mcp, 정적 Bearer 토큰·Origin 검사·보호 자원 메타데이터, worker_threads, 구조화 로그), esbuild 번들 `out/server`.
+  MCP 16도구(공식 SDK 1.30.0, 프로토콜 2025-11-25 — 계획서의 2026-07-28 은 SDK 에 없음), stdio·Streamable HTTP(stateless).
+- 검토 에이전트 지적 반영: 크기 결과를 계산 전에 픽셀 한도 검사·자르기는 스레드로, `core/doc/pixels` 가 `core/index` 를 거쳐 서버 번들에 ag-psd 를 끌어오던 것(빌드 검사 추가),
+  토큰 scope 가 모르는 값이면 쓰기 권한이 되던 것, 대기 중 redo 라벨 오류, 문서 삭제 시 대기 작업이 큐에 남던 것, 잘못된 X-Filename 500·과대 업로드 413 대신 연결 끊김,
+  스레드 왕복 뒤 이력 비트맵 공유가 깨지던 것(`stripShared`/`restoreShared`), 레이어 클릭(quiet)만으로 배경 제거 결과가 버려지던 것.
+- 서버 기한 타이머가 부하 중 2초 늦게 깨어난 사례(MCP E2E M12) → 커밋 직전에도 기한 검사.
+
+**검증**: typecheck · 단위 **89/89** · build · Electron E2E **120/120**(N 그룹 5 추가, Xvfb) · 웹 E2E **15/15**(헤드리스 Chromium) · MCP E2E **15/15**(SDK 클라이언트 HTTP·stdio) ·
+`npm run audit` 79장 중 환경 설정·작업 내역 확인 · 잔여 Electron·서버·브라우저 프로세스 0 (검토 반영 후 전체 재실행 기준).
+**인스톨러**: 첫 빌드가 288MB — `build.files` 의 `out/**` 에 웹 빌드(SAM 35MB)·서버 번들이 딸려 들어감 → `!out/web`·`!out/server` 제외 후 **247MB**(v1.0.4 와 같음), app.asar 에 web/server 없음·retouch.wasm 있음.
+v1.1.0 바탕화면 복사·SHA-256 일치(`5015f9d8377bcc44…`), 옛 v1.0.4 바탕화면 설치 파일 정리. 커밋·푸시는 하지 않았다.
+**사고**: 확인하려고 `npx asar extract-file … package.json` 을 프로젝트 폴더에서 실행 → 빌드용 package.json 이 프로젝트 것을 덮어씀. HEAD 에서 복원 후 변경분 재적용, typecheck·단위·build:server 재확인 (인스톨러는 덮어쓰기 전에 구운 것).
+
+**다음**: v1.1.0 설치본 테스트(배경 제거 중 탭 바꾸기·실행 취소 메모리). MCP 를 실제 AI 클라이언트에 연결해 보기, 서버 한도 실측 — todo P2.
+
+## 2026-09-22 — Claude 인계와 웹·외부 MCP 확장 가이드라인
+
+**요청**: Claude로 이어갈 수 있도록 미흡한 점·보완 우선순위와 향후 웹·외부 MCP 설계 가이드라인 작성.
+
+**수정**: `handoff.md`에 현재 기준점·보존할 계약·다음 세션 지시문을 정리. `plans/0004-web-mcp.md`에 비용/메모리/취소 과제, 브라우저와 서버의 문서 소유권, 공통 명령 계층, 버전·멱등성·job·인증·자산 수명과 단계별 완료 기준 제안. CLAUDE 인덱스·todo 연결. 구현·배포·버전 변경은 없음.
+앞선 사용자 커밋·푸시 요청으로 코드 기준 `deccd04`가 origin/main에 반영된 상태에서 작성했다. 아래 이전 블록의 미커밋 표기는 당시 구현 완료 시점의 기록이다.
+
+**검증**: 기존 코드·ADR·검수 가이드와 대조, 공식 MCP 명세와 SDK/클라이언트 지원 버전 구분. 문서 링크·참조 경로와 `git diff --check` 확인. 문서만 변경하여 코드 테스트는 재실행하지 않음; 직전 코드 검증은 아래 블록 참조.
+
+**다음**: `handoff.md`로 인계. 실제 구현 요청 시 계획의 해당 단계부터 진행하고 채택한 구조는 ADR로 기록.
+
 ## 2026-09-22 — v1.0.4 실행 경로 검수·성능·저장·자원 수명 리팩토링
 
 **요청**: Rust를 섞어도 웹으로 옮길 수 있는지 확인, 전체 실행 흐름의 비용·중복·미사용 코드 검수와 리팩토링.

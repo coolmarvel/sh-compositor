@@ -6,6 +6,8 @@ import * as A from '../editor/actions'
 import { bakeLayer, adjustLayer, editPixels } from '../editor/pixels'
 import { encodeJpeg, encodeWebp, mergedBitmap, saveProject } from '../editor/io'
 import { clearSessionRecovery } from '../editor/autosave'
+import { runCommand, capture, land } from '../editor/commandBridge'
+import { resizeCommand, layerUpdateCommand } from '../../../application/commands'
 import { unpackProject } from '@core/index'
 import {
   getLayer,
@@ -13,7 +15,6 @@ import {
   makeLayer,
   identityTransform,
   newDoc,
-  resizeImage,
   flattenDoc,
   histogram,
   parseHex,
@@ -221,8 +222,8 @@ function FiltersHost({ focus }: { focus?: string }): JSX.Element | null {
         editor.setPreview(null)
         close()
         const v = latest.current
-        const d = editor.doc
-        if (d && v !== DEFAULT_FILTERS) void editor.busy('필터 적용 중…', () => editor.commit(adjustLayer(d, target.id, null, v), '필터'))
+        const at = capture()
+        if (at && v !== DEFAULT_FILTERS && getLayer(at.doc, target.id)) void editor.busy('필터 적용 중…', () => land(at, adjustLayer(at.doc, target.id, null, v), '필터'))
       }}
     />
   )
@@ -685,6 +686,7 @@ function RefineEdgeDialog(): JSX.Element {
 function PreferencesDialog(): JSX.Element {
   const s = editor.state.settings
   const [hist, setHist] = useState(s.historyLimit)
+  const [budget, setBudget] = useState(s.historyBudgetMB)
   const [auto, setAuto] = useState(s.autosaveMinutes)
   const [fast, setFast] = useState(s.fastInteract)
   const [bg, setBg] = useState<BgMode>(loadBgMode)
@@ -700,7 +702,7 @@ function PreferencesDialog(): JSX.Element {
   const software = /swiftshader|llvmpipe|basic render/i.test(gpu)
   const go = (): void => {
     close()
-    editor.setSettings({ historyLimit: hist, autosaveMinutes: auto, fastInteract: fast })
+    editor.setSettings({ historyLimit: hist, historyBudgetMB: budget, autosaveMinutes: auto, fastInteract: fast })
     try {
       localStorage.setItem(BG_MODE_KEY, bg)
     } catch {
@@ -727,6 +729,7 @@ function PreferencesDialog(): JSX.Element {
     >
       <GroupBox title="작업">
         <SliderRow label="실행 취소 단계" labelWidth={100} value={hist} min={20} max={300} step={10} unit="칸" onChange={setHist} />
+        <SliderRow label="실행 취소 메모리" labelWidth={100} value={budget} min={256} max={8192} step={256} unit="MB" onChange={setBudget} />
         <Row label="자동 저장" labelWidth={100}>
           <Select
             value={auto}
@@ -741,7 +744,7 @@ function PreferencesDialog(): JSX.Element {
             ))}
           </Select>
         </Row>
-        <Lines>{['실행 취소 단계가 많을수록 메모리를 더 씁니다.', '큰 사진을 다룰 때는 줄이세요.', '자동 저장은 프로그램이 갑자기 꺼졌을 때 복구하는 데 쓰입니다.']}</Lines>
+        <Lines>{['실행 취소 메모리를 넘으면 오래된 단계부터 지웁니다.', '큰 사진을 다룰 때는 메모리를 줄이세요.', '자동 저장은 프로그램이 갑자기 꺼졌을 때 복구하는 데 쓰입니다.']}</Lines>
       </GroupBox>
       <GroupBox title="속도">
         <Check label="끄거나 칠하는 동안 화면을 낮은 해상도로 그리기 (빠름)" checked={fast} onChange={setFast} />
@@ -917,7 +920,7 @@ export default function DialogHost(): JSX.Element | null {
             onClose={close}
             onApply={(r) => {
               close()
-              editor.commit(resizeImage(doc, r.width ?? doc.width, r.height ?? doc.height, r.dpi), '이미지 크기')
+              runCommand(resizeCommand, { width: r.width ?? doc.width, height: r.height ?? doc.height, resolution: r.dpi })
             }}
           />
         )
@@ -990,7 +993,7 @@ export default function DialogHost(): JSX.Element | null {
             onClose={close}
             onApply={(name) => {
               close()
-              editor.commit(updateLayer(doc, l.id, { name }), '이름 바꾸기')
+              runCommand(layerUpdateCommand, { layerId: l.id, name }, '이름 바꾸기')
             }}
           />
         )

@@ -58,11 +58,10 @@ const progressOf =
 
 // ── 일꾼 (화면을 멈추지 않게 추론을 다른 스레드에서) ──
 const client = new WorkerClient<{ key: string; current: number; total: number }>(() => new Worker(new URL('./bgremoveWorker.ts', import.meta.url), { type: 'module' }), '배경 제거 일꾼이 멈췄습니다.')
-async function runInWorker(png: Uint8Array, opts: { engine: BgEngine; model?: OnlineModel }, progress: Progress): Promise<Uint8Array> {
+async function runInWorker(png: Uint8Array, opts: { engine: BgEngine; model?: OnlineModel }, progress: Progress, signal?: AbortSignal): Promise<Uint8Array> {
   const result = await client.request<{ bytes: Uint8Array }>(
     { png, engine: opts.engine, model: opts.model, publicPath: opts.engine === 'offline' ? offlineBase() : '' },
-    (p) => progress(p.key, p.current, p.total),
-    [png.buffer]
+    { progress: (p) => progress(p.key, p.current, p.total), transfer: [png.buffer], signal }
   )
   return result.bytes
 }
@@ -82,12 +81,12 @@ async function runHere(png: Uint8Array, opts: { engine: BgEngine; model?: Online
 }
 
 /** 비트맵 → 피사체 마스크 (0~255, 비트맵 크기) */
-export async function subjectMask(bmp: Bitmap, refine: MatteRefine | null, opts: { engine: BgEngine; model?: OnlineModel }, onProgress?: BgProgress): Promise<Uint8Array> {
+export async function subjectMask(bmp: Bitmap, refine: MatteRefine | null, opts: { engine: BgEngine; model?: OnlineModel }, onProgress?: BgProgress, signal?: AbortSignal): Promise<Uint8Array> {
   const progress = progressOf(onProgress)
   onProgress?.('1/2 모델 불러오는 중…', 0)
   let bytes: Uint8Array
   try {
-    bytes = await runInWorker(encodePng(bmp.width, bmp.height, bmp.data), opts, progress)
+    bytes = await runInWorker(encodePng(bmp.width, bmp.height, bmp.data), opts, progress, signal)
   } catch (e) {
     if (!(e instanceof WorkerUnavailableError)) throw e
     bytes = await runHere(encodePng(bmp.width, bmp.height, bmp.data), opts, progress)

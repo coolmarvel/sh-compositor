@@ -5,6 +5,7 @@ import { checkLimits } from '@core/limits'
  */
 import { editor } from './store'
 import { packDoc } from './pack'
+import { capture, currentDoc } from './commandBridge'
 import {
   deserializeDoc,
   psdToDoc,
@@ -152,12 +153,15 @@ export function clearRecent(): void {
 
 /** 이미지를 현재 문서에 새 레이어로 (가져오기·드롭·붙여넣기) — 위치 없으면 가운데 */
 export async function importAsLayer(bytes: Uint8Array, name: string, at?: { x: number; y: number }): Promise<void> {
-  const doc = editor.doc
-  if (!doc) return openBytes(name, bytes, null)
+  const c = capture()
+  if (!c) return openBytes(name, bytes, null)
   const { bitmap } = await decodeImage(bytes, name)
+  // 디코딩하는 동안 그 탭의 문서가 바뀌었을 수 있다 — 지금 문서에 얹는다 (새 레이어 추가는 다른 편집을 덮지 않는다)
+  const doc = currentDoc(c)
+  if (!doc) return
   const x = at ? Math.round(at.x - bitmap.width / 2) : Math.round((doc.width - bitmap.width) / 2)
   const y = at ? Math.round(at.y - bitmap.height / 2) : Math.round((doc.height - bitmap.height) / 2)
-  editor.commit(insertLayer(doc, makeLayer('pixel', stripExt(name), bitmap, identityTransform(bitmap.width, bitmap.height, x, y))), '가져오기')
+  editor.commitTo(c.tabId, editor.revisionOf(c.tabId)!, insertLayer(doc, makeLayer('pixel', stripExt(name), bitmap, identityTransform(bitmap.width, bitmap.height, x, y))), '가져오기')
 }
 
 /** 저장 (경로 없으면 다른 이름으로) */

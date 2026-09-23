@@ -42,3 +42,5 @@ SOFTWARE.
 | fflate | MIT | .shcomp 압축 |
 | heic2any, utif2 | MIT | HEIC·TIFF 디코딩 |
 | Electron, electron-vite | MIT | 데스크톱 셸·빌드 |
+| @modelcontextprotocol/sdk | MIT | headless 서버의 MCP (서버 번들 `out/server`에만 포함, 설치본에는 없음) |
+| zod | MIT | MCP 도구 입력 스키마 (서버 번들에만 포함) |

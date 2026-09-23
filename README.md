@@ -14,6 +14,7 @@
 - **AI 배경 제거**: 내장 모델(오프라인) 또는 최신 모델(온라인) → 레이어 마스크로 (비파괴)
 - **파일**: `.shcomp` 프로젝트(Compositor `.comp` 형식 호환, `.comp` 폴더 열기), PNG·JPEG·WebP 내보내기(실제 인코딩 미리보기), 클립보드, 최근 파일, 자동 저장·복구
 - 포토샵식 단축키, 작업 내역, 탭 여러 문서
+- **웹·자동화 (v1.1)**: 같은 편집기를 브라우저에서(`npm run build:web`), 브라우저 없는 서버 + MCP 도구로 AI 클라이언트가 편집(`npm run build:server`) — [`docs/guides/web-mcp.md`](docs/guides/web-mcp.md)
 
 ## 개발
 
@@ -21,7 +22,9 @@
 npm install
 npm run dev          # 개발 모드
 npm run typecheck && npm test && npm run build
-npm i --no-save playwright && node test/e2e/editor.mjs   # 실제 앱 E2E (70건)
+npm i --no-save playwright && npm run e2e   # 실제 앱 E2E (120건, Xvfb)
+npm run build:web && npm run e2e:web          # 웹 로컬 편집기 E2E (15건)
+npm run build:server && npm run e2e:mcp       # headless 서버·MCP E2E (15건)
 npm run dist:win     # Windows 인스톨러 (WSL 에서는 Wine 필요)
 ```
 

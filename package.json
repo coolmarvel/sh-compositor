@@ -1,6 +1,6 @@
 {
   "name": "sh-compositor",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "포토샵형 오프라인 이미지 편집기 — Compositor(MIT, macOS)를 Windows 용으로 옮기고 클래식 업무 UI 로 감싼 것 (가칭)",
   "author": "이성현",
   "license": "UNLICENSED",
@@ -9,6 +9,11 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build && node scripts/obfuscate.cjs",
+    "build:web": "vite build -c vite.web.config.ts && node scripts/web-assets.cjs",
+    "dev:web": "vite -c vite.web.config.ts",
+    "preview:web": "vite preview -c vite.web.config.ts",
+    "build:server": "node scripts/build-server.mjs",
+    "server": "node out/server/index.mjs",
     "start": "electron-vite preview",
     "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
@@ -19,6 +24,8 @@
     "pack:win": "npm run build && electron-builder --win --dir",
     "dist:win": "node scripts/fetch-models.cjs && npm run build && electron-builder --win",
     "e2e": "env -u WAYLAND_DISPLAY xvfb-run -a -s \"-screen 0 1920x1080x24\" node test/e2e/editor.mjs",
+    "e2e:web": "node test/e2e/web.mjs",
+    "e2e:mcp": "node test/e2e/mcp.mjs",
     "perf": "env -u WAYLAND_DISPLAY xvfb-run -a -s \"-screen 0 1920x1080x24\" node test/e2e/perf.mjs",
     "audit": "env -u WAYLAND_DISPLAY xvfb-run -a -s \"-screen 0 1920x1080x24\" node test/e2e/audit.mjs",
     "models": "node scripts/fetch-models.cjs",
@@ -39,6 +46,7 @@
   },
   "devDependencies": {
     "@huggingface/transformers": "^4.3.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -52,7 +60,8 @@
     "react-dom": "^18.3.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "zod": "^4.6.5"
   },
   "build": {
     "appId": "xyz.chungmu.shcompositor",
@@ -64,7 +73,9 @@
     "files": [
       "out/**/*",
       "package.json",
-      "!node_modules/**/*"
+      "!node_modules/**/*",
+      "!out/web/**/*",
+      "!out/server/**/*"
     ],
     "extraResources": [
       {

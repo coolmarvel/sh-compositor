@@ -21,6 +21,9 @@ React StrictMode의 effect 재실행에서 IPC 구독과 자동 저장 구독이
 - `util/workerClient.ts`가 요청 ID·진행 메시지·응답·오류·전송 예외·종료를 관리한다.
   Worker 생성 불가만 별도 오류로 구분하여 기존 동기 폴백 정책을 유지한다. 런타임 크래시는 실패로 알리고 다음 요청에서 새 Worker를 만든다.
 - `editor/pack.ts`는 같은 Doc·같은 형식의 동시 인코딩만 공유한다. 완료된 전체 파일 바이트를 장기간 캐시하지 않는다.
+- (v1.1.0) 요청별 `signal` 취소는 그 요청만 끝내고(늦은 답·진행은 버림) 일꾼은 유지한다. `timeoutMs` 초과는 멈춘 계산으로 보고 일꾼을 종료해 대기 요청을 모두 실패시킨다.
+  공유 인코딩은 `SharedJob`으로 소비자별 취소를 받고, 모든 소비자가 떠나야 밑의 요청을 취소한다. 자동 저장 종료는 인코딩을 취소하되 진행 중 쓰기는 끝까지 기다린다.
+- (v1.1.0) 탭을 닫으면 `editor.tabSignal(tabId)`가 abort된다. 오래 걸린 결과는 `commitTo(tabId, revision)`로 시작 시점 탭·revision에만 커밋한다 (ADR-0005).
 - preload 이벤트 등록은 해제 함수를 반환하고 React effect cleanup에서 호출한다.
 - `main/files.ts`는 같은 디렉터리의 고유 임시 파일에 완성본을 쓴 뒤 rename으로 교체한다.
   교체 실패 시 기존 파일을 먼저 지우지 않으며 임시 파일은 정리한다. 디스크 flush까지 보장하는 트랜잭션은 아니다.

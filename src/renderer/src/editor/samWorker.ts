@@ -33,7 +33,9 @@ async function load(base: string, id: number): Promise<void> {
   processor = await AutoProcessor.from_pretrained(REPO)
 }
 
-self.onmessage = async (e: MessageEvent<Msg>) => {
+self.onmessage = async (e: MessageEvent<Msg | { cancel: number }>) => {
+  // 취소 알림: 추론 중간에는 멈출 수 없다. 호출측이 결과를 버린다
+  if ('cancel' in e.data) return
   const m = e.data
   try {
     if (m.op === 'embed') {

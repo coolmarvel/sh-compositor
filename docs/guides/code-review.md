@@ -40,7 +40,7 @@ Electron 제거만으로 완성된 웹 앱이 되는 것은 아니다. 다음 �
 | `bgrm://`, `aimodel://`와 개발용 `/@fs` URL | 서버 정적 모델 URL·CORS/CSP·모델 캐시/오프라인 다운로드 정책 |
 | electron-vite/NSIS 빌드 | 웹용 Vite 엔트리·배포 base 경로·서버 설정, 브라우저 E2E |
 
-이번 작업은 웹 제품 배포를 구현하지 않았다. 플랫폼 경계를 확인하고 공통 배경 작업 로직을 Electron 없이 테스트 가능한 형태로 정리했다.
+v1.0.4 검수 시점에는 웹을 구현하지 않았다. v1.1.0에서 위 경계를 `src/renderer/src/platform/web.ts`로 구현했다. 실행·제약은 [웹·MCP 가이드](web-mcp.md), 구조 결정은 [ADR-0005](../adr/0005-application-layer.md).
 
 ## 추가 측정 대상
 

@@ -15,7 +15,7 @@ const INTERVAL = 60_000
 const rid = (tabId: string): string => `${SESSION}-${tabId}`
 const writer = new RecoveryWriter<Doc>(
   () => editor.state.tabs.map((t) => ({ id: t.id, name: t.name, path: t.path, doc: t.history.present, dirty: editor.isDirty(t) })),
-  async (doc) => (await packDoc(doc, 'shcomp')).bytes,
+  async (doc, signal) => (await packDoc(doc, 'shcomp', signal)).bytes,
   (t, bytes) => window.api.recovery.write(rid(t.id), { name: t.name, path: t.path }, bytes),
   (id) => window.api.recovery.clear(rid(id))
 )

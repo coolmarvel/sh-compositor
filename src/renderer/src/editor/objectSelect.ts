@@ -13,7 +13,8 @@ import { docThumbnail } from './commands'
 import { mergedBitmap } from './io'
 import { makeSelection, combine, growSelection, featherSelection, guidedFilter, type Doc, type Layer, type Selection, type SelectMode } from '@core/index'
 
-const BASE = 'aimodel://assets/'
+/** 모델 위치 — 데스크톱은 aimodel://, 웹은 배포 경로 아래 models/sam/ (platform 이 정한다) */
+const modelBase = (): string => window.api?.samAssetsUrl ?? 'aimodel://assets/'
 const MAX_SIDE = 1024 // SAM 입력은 긴 변 1024 — 그 이상 보내 봐야 줄여서 쓴다
 
 type Pt = { x: number; y: number }
@@ -26,7 +27,11 @@ const client = new WorkerClient<string>(
     emb = null
   }
 )
-const call = <T>(msg: Record<string, unknown>, progress?: (label: string) => void, transfer: Transferable[] = []): Promise<T> => client.request<T>(msg, progress, transfer)
+/** 모델 준비·분석이 멈춘 경우의 기한 — 첫 분석(모델 불러오기 포함)은 느린 PC 에서도 이 안에 끝난다 */
+const EMBED_TIMEOUT = 180_000
+const DECODE_TIMEOUT = 30_000
+const call = <T>(msg: Record<string, unknown>, progress?: (label: string) => void, transfer: Transferable[] = []): Promise<T> =>
+  client.request<T>(msg, { progress, transfer, timeoutMs: msg.op === 'embed' ? EMBED_TIMEOUT : DECODE_TIMEOUT })
 
 // ── 그림 특징 (문서 레이어가 같으면 다시 쓴다) ──
 let emb: { layers: Layer[]; W: number; H: number; key: string; w: number; h: number; guide: Float32Array } | null = null
@@ -56,7 +61,7 @@ async function ensureEmbedding(doc: Doc, progress: (l: string) => void): Promise
     guide[i] = (0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2]) / 255
   }
   const key = `k${++keySeq}`
-  await call({ op: 'embed', key, w: img.width, h: img.height, rgba, base: BASE }, progress, [rgba.buffer])
+  await call({ op: 'embed', key, w: img.width, h: img.height, rgba, base: modelBase() }, progress, [rgba.buffer])
   emb = { layers: doc.layers, W: doc.width, H: doc.height, key, w: img.width, h: img.height, guide }
   return emb
 }

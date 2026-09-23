@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import Box from '@mui/material/Box'
 import ButtonBase from '@mui/material/ButtonBase'
 import Tooltip from '@mui/material/Tooltip'
 import PhotoCameraOutlined from '@mui/icons-material/PhotoCameraOutlined'
 import CloseRounded from '@mui/icons-material/CloseRounded'
 import { editor, useEditor } from '../../editor/store'
+import { historyBytes } from '@core/index'
 import { ui } from '../../theme'
 
 const { color, chrome, space, font, surface } = ui
@@ -19,6 +20,8 @@ export default function HistoryPanel(): JSX.Element {
   const h = tab?.history ?? null
   const rows = h ? [...h.past.map((p) => p.label), h.label, ...h.future.map((f) => f.label)] : []
   const cur = h ? h.past.length : -1
+  // 공유 비트맵은 한 번만 센 픽셀 메모리 (한도는 환경 설정)
+  const mb = useMemo(() => (h ? Math.round(historyBytes(h) / (1024 * 1024)) : 0), [h])
   const jump = (i: number): void => {
     for (let k = cur; k > i; k--) editor.undo()
     for (let k = cur; k < i; k++) editor.redo()
@@ -86,7 +89,7 @@ export default function HistoryPanel(): JSX.Element {
       </Box>
       <Box sx={{ height: 24, flexShrink: 0, display: 'flex', alignItems: 'center', gap: '4px', px: `${space.sm}px`, background: surface.toolbar, borderTop: `1px solid ${chrome.frame}` }}>
         <Box component="span" sx={{ flex: 1, fontSize: font.xs, color: color.textSecondary }}>
-          {h ? `${rows.length}칸 · 최대 ${limit}칸` : ''}
+          {h ? `${rows.length}칸 · 최대 ${limit}칸 · 약 ${mb}MB` : ''}
         </Box>
         <Tooltip title="스냅샷 만들기 (지금 상태를 이름 붙여 남깁니다)">
           <span>

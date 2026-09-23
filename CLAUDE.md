@@ -23,7 +23,8 @@
    (+릴리스급이면 `docs/changelog.md`)를 갱신한다. 문서 규칙은 `docs/writing-guide.md`.
 2. 검증을 통과하기 전에는 커밋 메시지 작성/산출물 전달을 하지 않는다:
    `npm run typecheck && npm test && npm run build` + 화면을 건드렸으면 `node test/e2e/editor.mjs` (Playwright,
-   `npm i --no-save playwright` 임시 설치). **검증에 띄운 Electron·Playwright 프로세스는 끝나면 반드시 종료 확인**
+   `npm i --no-save playwright` 임시 설치). 렌더러·platform 을 건드렸으면 `npm run build:web && npm run e2e:web`,
+   application·server 를 건드렸으면 `npm run build:server && npm run e2e:mcp` 도. **검증에 띄운 Electron·Playwright 프로세스는 끝나면 반드시 종료 확인**
    (`pgrep -af "[s]h-compositor/node_modules/electron"` 이 비어야 함 — 사용자 지시 2026-09-21). E2E 는 `npm run e2e`(Xvfb, 화면에 안 뜸).
 3. 버전을 판단해 올린다 (아래 "버전 정책").
 4. 산출물 전달: 인스톨러를 굽고 바탕화면에 복사(옛 버전 exe 는 지움) → "vX.Y.Z 설치·테스트 후 스크린샷 달라"고 알린다.
@@ -67,6 +68,8 @@ sh-web-editor·파일 변환기)과 같은 **클래식 업무 UI** 로 감쌌다
 
 ## 문서 인덱스 (docs/)
 
+Claude 인계 시 `docs/handoff.md`를 읽는다. 웹·MCP 현재 동작은 `docs/guides/web-mcp.md`, 남은 단계·보완 우선순위는 `docs/plans/0004-web-mcp.md`가 기준이다.
+
 | 파일 | 용도 |
 |---|---|
 | `docs/writing-guide.md` | **문서 지배 규칙** (SSOT·frontmatter·코드 1:1 대조). 문서 쓰기 전 필독 |
@@ -84,10 +87,14 @@ sh-web-editor·파일 변환기)과 같은 **클래식 업무 UI** 로 감쌌다
 ```bash
 npm run dev          # 개발 모드 (HMR)
 npm run typecheck    # 타입 검사 (node + web)
-npm test             # src/core 순수 로직 테스트 (node:test)
+npm test             # core·application·서버 설정 순수 로직 테스트 (node:test)
 npm run build        # electron-vite build + 난독화 (scripts/obfuscate.cjs)
 npm run format       # Prettier (printWidth 200)
-npm run e2e [-- A B …]  # 실제 앱 E2E 112건 — Xvfb 가상 화면에서 (사용자 화면에 창이 뜨지 않음). build 후
+npm run e2e [-- A B …]  # 실제 앱 E2E 120건 — Xvfb 가상 화면에서 (사용자 화면에 창이 뜨지 않음). build 후
+npm run build:web      # 웹 로컬 편집기 → out/web (dev:web 5190 · preview:web 5191)
+npm run e2e:web        # 웹 E2E 15건 (헤드리스 Chromium, build:web 후)
+npm run build:server   # headless 서버·MCP → out/server/index.mjs (SHC_TOKENS=… npm run server · --stdio)
+npm run e2e:mcp        # 서버·MCP E2E 15건 (공식 SDK 클라이언트, build:server 후)
 npm run perf           # 체감 성능 (PERF_SIZE=4000x3000 PERF_LAYERS=5 PERF_PROFILE=1)
 npm run audit -- <dir>  # 모든 대화상자·메뉴·도구 줄 스크린샷 (문구·줄바꿈 검수)
 npm run models       # AI 개체 선택 모델(SlimSAM q8 35MB)·ORT wasm → resources/sam (git 제외, dist:win 이 먼저 부름)
@@ -100,8 +107,10 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
   `history.ts`(스냅샷 실행취소), `selection.ts`(마스크 선택·마법봉), `brush.ts`, `project.ts`(.shcomp = .comp v7 zip), `transform.ts`, `blend.ts`
 - 보정·필터·효과·원근·내용 인식·매트·한도: `src/core/*.ts` (파일 변환기에서 이식, 테스트 `test/compositor*.test.ts`)
 - **GPU 거울**: `src/renderer/src/gl/GLRenderer.ts`·`shaders.ts` — CPU 합성 규칙을 그대로 따른다 (`docs/guides/rendering.md`)
-- 편집기 상태: `editor/store.ts`(탭·이력·도구 설정·대화상자), 동작: `editor/actions.ts`(메뉴·단축키 공용), 픽셀 편집 규약: `editor/pixels.ts`
+- 편집기 상태: `editor/store.ts`(탭·이력·도구 설정·대화상자, 탭별 `revision`·`commitTo`·`tabSignal`), 동작: `editor/actions.ts`(메뉴·단축키 공용), 픽셀 편집 규약: `core/doc/pixels.ts`(`editor/pixels.ts` 는 재수출)
   (`docs/guides/pixels.md`), 입출력: `editor/io.ts`, 배경 제거: `editor/bgremove.ts`(동적 import), 캔버스 명령 등록소: `editor/commands.ts`
+- **명령 계층(UI 독립)**: `src/application/` — `commands.ts`(parse/run: resize·crop·layer.update·filter.apply) · `service.ts`(owner·revision·operationId·job·한도) · `repository/assets/jobs/codecs/errors`. 편집기 연결 `editor/commandBridge.ts` (ADR-0005)
+- **웹·서버**: `renderer/src/platform/{index,web,idb}.ts`(window.api 브라우저 구현) · `vite.web.config.ts` · `src/server/{main,http,mcp,auth,config,workerRunner,taskWorker}.ts` (가이드 `docs/guides/web-mcp.md`)
 - 도구: `tools/{move,select,paint,misc}.ts` + 목록·단축키·설명 `tools/index.ts`
 - PSD: `core/doc/psd.ts`(ag-psd, 테스트 `test/psd.test.ts`) · 안내선 `editor/guides.ts`+`components/Rulers.tsx` · 도형 `editor/shape.ts` · 일꾼 `editor/{packWorker,bgremoveWorker,samWorker}.ts`
 - **개체 선택(AI)**: `editor/objectSelect.ts`(임베딩 캐시·프롬프트 변환·후보 고르기·다듬기) + `editor/samWorker.ts`(transformers.js SlimSAM) + `tools/objectSelect.ts`(사각형·올가미·칠하기·클릭)
@@ -132,6 +141,13 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 - **bytecodePlugin 금지**(플랫폼 종속 크래시). 새 대형 라이브러리 청크는 `scripts/obfuscate.cjs` SKIP 에 추가.
 - E2E 는 `--user-data-dir` 를 따로 준다 — 도구 설정이 localStorage 에 남아 다음 실행을 오염시킨다.
 - 프로세스 킬 명령에 패턴을 그대로 쓰면 자기 셸까지 죽는다 → `pkill -f "[s]h-compositor/…"` 처럼 대괄호 트릭.
+- **await 뒤에 커밋하는 동작은 `commandBridge.capture()`→`land()`** — `editor.commit` 은 활성 탭에 넣는다. 배경 제거 중 탭을 바꾸면 결과가 다른 탭에 들어가던 사고(v1.1.0 수정).
+- `window.api` 는 모듈 최상위에서 읽지 않는다 (웹은 `platform` 이 main.tsx 첫 import 에서 넣는다). 웹에서 Ctrl+N·Ctrl+W 는 브라우저가 가로챈다 → E2E 는 메뉴로.
+- `src/application`·`src/server` 는 React·`editor`·`window` 를 import 하지 않는다. 서버는 `core/doc/psd.ts`(캔버스 필요)를 import 하지 않는다.
+- MCP SDK 는 1.30.0(프로토콜 2025-11-25) 고정. 오류 결과에 structuredContent 를 넣지 않는다 (클라이언트가 outputSchema 로 검사해 -32602).
+- `npx asar extract-file` 은 현재 폴더에 푼다 — 프로젝트 루트에서 `package.json` 을 뽑으면 덮어쓴다 (2026-09-22 사고). 임시 폴더에서 실행.
+- 새 빌드 산출물 폴더는 `build.files` 에서 빼는지 확인 (v1.1.0 첫 빌드가 out/web 을 실어 288MB).
+- 서버 작업 기한은 커밋 직전에도 검사한다 — 부하·VM 정지로 타이머가 2초 늦게 깨어난 사례(2026-09-22 MCP E2E M12).
 
 ## 디자인 시스템 (클래식)
 
@@ -157,6 +173,12 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 - `native/retouch/kernel.rs` → `npm run build:retouch` → `src/renderer/src/assets/retouch.wasm` (소스와 함께 보관).
 - `core/retouchWasm.ts` 영역 전달·재사용 메모리, `core/retouch.ts` TS 기준/폴백. ADR-0003 참조.
 - 커널 수정 시 WASM 재생성 후 `test/retouch.test.ts` 차등 비교 및 E2E F5 확인. 전체 이미지 복사를 자국 루프에 다시 넣지 않는다.
+
+## 명령 계층·웹·MCP (v1.1.0)
+
+- 구조 결정 `docs/adr/0005-application-layer.md`, 실행·환경 변수·도구 목록 `docs/guides/web-mcp.md`, 남은 단계 `docs/plans/0004-web-mcp.md` 상단 현황.
+- 이력은 단계 수 + 바이트 예산(`historyBudgetMB`, 공유 비트맵 한 번만 셈, 직전 1단계는 남김). Worker 요청은 `signal`(그 요청만)·`timeoutMs`(일꾼 종료).
+- 새 명령 = `application/commands.ts` parse/run → `COMMANDS` → `server/mcp.ts` 도구 → 단위·`e2e:mcp`. UI 에 같은 동작이 있으면 `runCommand` 로.
 
 ## 실행 경로 검수 (v1.0.4)
 

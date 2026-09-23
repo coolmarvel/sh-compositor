@@ -133,7 +133,7 @@ test('worker routes out-of-order replies, progress and resets all requests after
     return w as unknown as Worker
   }, 'crash')
   const progress: string[] = []
-  const a = client.request<{ value: number }>({}, (p) => progress.push(p)),
+  const a = client.request<{ value: number }>({}, { progress: (p) => progress.push(p) }),
     b = client.request<{ value: number }>({})
   workers[0].onmessage!({ data: { id: 1, progress: 'loading' } })
   workers[0].onmessage!({ data: { id: 2, value: 2 } })

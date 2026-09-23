@@ -1579,6 +1579,70 @@ groups.L = async () => {
   await closeApp(app)
 }
 
+// N) v1.1 명령 계층 · 요청 당시 탭에 커밋 · 이력 메모리 예산
+groups.N = async () => {
+  const { app, page, errors } = await launch()
+  await openFile(app, page, 'quad.png')
+  await t('N1 이미지 크기 (application 명령) → 한 단계·같은 결과', async () => {
+    const n = (await docInfo(page)).undo
+    await press(page, 'Control+Alt+i')
+    const dlg = page.getByRole('dialog')
+    await dlg.getByLabel('폭', { exact: true }).fill('100')
+    await dialogOk(page)
+    const d = await docInfo(page)
+    assert(d.w === 100 && d.h === 50 && d.undo === n + 1, JSON.stringify(d))
+    assert((await page.evaluate(() => window.__sc.editor.tab.history.label)) === '이미지 크기', 'label')
+    await press(page, 'Control+z')
+    assert((await docInfo(page)).w === 200, 'undo')
+  })
+  await t('N2 오래 걸린 결과는 시작한 탭에만 들어가고, 그사이 바뀐 문서는 덮지 않는다', async () => {
+    const r = await page.evaluate(() => {
+      const { editor, bridge } = window.__sc
+      const at = bridge.capture()
+      const next = { ...at.doc, resolution: 300 }
+      editor.addTab({ ...at.doc, id: 'other', resolution: 72 }, '다른 탭')
+      const landed = bridge.land(at, next, '배경 제거')
+      const a = editor.state.tabs.find((t) => t.id === at.tabId)
+      const out = { landed, aRes: a.history.present.resolution, activeRes: editor.doc.resolution, active: editor.tab.name }
+      // 같은 캡처로 한 번 더 = 문서가 이미 바뀜 → 버림
+      out.stale = bridge.land(at, { ...at.doc, resolution: 150 }, '늦은 결과')
+      out.aRes2 = editor.state.tabs.find((t) => t.id === at.tabId).history.present.resolution
+      editor.closeTab(editor.tab.id)
+      return out
+    })
+    assert(r.landed && r.aRes === 300 && r.activeRes === 72 && r.active === '다른 탭', JSON.stringify(r))
+    assert(!r.stale && r.aRes2 === 300, JSON.stringify(r))
+    await page.getByText('결과를 적용하지 않았습니다').first().waitFor({ timeout: 3000 })
+  })
+  await t('N3 실행 취소 메모리 예산: 큰 편집이 쌓이면 오래된 단계부터 지우고 패널에 MB 표시', async () => {
+    await newDoc(page, 2000, 2000)
+    await page.evaluate(() => window.__sc.editor.setSettings({ historyBudgetMB: 40 }))
+    for (let i = 0; i < 5; i++) {
+      await press(page, 'x')
+      await press(page, 'Alt+Backspace')
+    }
+    const r = await page.evaluate(() => {
+      const h = window.__sc.editor.tab.history
+      return { past: h.past.length }
+    })
+    assert(r.past >= 1 && r.past <= 2, JSON.stringify(r))
+    await page
+      .getByText(/약 \d+MB/)
+      .first()
+      .waitFor({ timeout: 3000 })
+    await page.evaluate(() => window.__sc.editor.setSettings({ historyBudgetMB: 1024 }))
+  })
+  await t('N4 환경 설정: 실행 취소 메모리 슬라이더', async () => {
+    await press(page, 'Control+k')
+    const dlg = page.getByRole('dialog')
+    await dlg.getByText('실행 취소 메모리', { exact: true }).waitFor()
+    await page.keyboard.press('Escape')
+    await dlg.waitFor({ state: 'detached' })
+  })
+  await t('N5 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n')))
+  await closeApp(app)
+}
+
 const order = ONLY.length ? ONLY : Object.keys(groups)
 for (const g of order) {
   console.log(`[${g}]`)

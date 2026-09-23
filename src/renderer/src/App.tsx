@@ -325,7 +325,8 @@ export default function App(): JSX.Element {
         },
         'sep',
         { label: '닫기', shortcut: 'Ctrl+W', onClick: () => A.requestCloseTab(), disabled: !has },
-        { label: '끝내기', shortcut: 'Alt+F4', onClick: () => A.requestQuit() }
+        // 웹은 브라우저 탭을 닫아 끝낸다 (페이지가 창을 닫을 수 없다)
+        ...(window.api.platform === 'web' ? [] : [{ label: '끝내기', shortcut: 'Alt+F4', onClick: () => A.requestQuit() }])
       ]
     },
     {

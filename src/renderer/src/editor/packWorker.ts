@@ -4,7 +4,9 @@
  */
 import { packProject, docToPsd, type Doc } from '@core/index'
 
-self.onmessage = (e: MessageEvent<{ id: number; op: 'shcomp' | 'psd'; doc: Doc }>) => {
+self.onmessage = (e: MessageEvent<{ id: number; op: 'shcomp' | 'psd'; doc: Doc } | { cancel: number }>) => {
+  // 취소 알림: 동기 계산이라 이미 돌고 있는 것은 멈출 수 없다. 호출측이 결과를 버린다
+  if ('cancel' in e.data) return
   const { id, op, doc } = e.data
   try {
     if (op === 'psd') {

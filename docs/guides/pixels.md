@@ -33,7 +33,7 @@ Compositor 는 변형된 레이어에도 역변환으로 칠한다 — 우리는
 
 ## 관련 코드
 
-- `src/renderer/src/editor/pixels.ts` — `bakeLayer`·`editPixels`·`fillSelection`·`eraseSelection`·`adjustLayer`·`layerViaCopy`·`trimToCanvas`
+- `src/core/doc/pixels.ts` (편집기는 `editor/pixels.ts` 재수출) — `bakeLayer`·`editPixels`·`fillSelection`·`eraseSelection`·`adjustLayer`·`layerViaCopy`·`trimToCanvas`
 - `src/renderer/src/editor/actions.ts` — 메뉴 동작이 위를 조합
 - `src/renderer/src/tools/paint.ts` — 브러시·흐림·도장·복구 세션(미리보기 문서 + `uploadRect`)
 
