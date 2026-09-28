@@ -16,7 +16,9 @@ export default defineConfig({
     resolve: {
       alias: {
         '@core': resolve('src/core'),
-        '@renderer': resolve('src/renderer/src')
+        '@renderer': resolve('src/renderer/src'),
+        // AI 지우개 일꾼의 ORT — transformers.js(개체 선택)와 같은 판이라 aimodel:// 의 asyncify wasm 을 함께 쓴다
+        '@sam-ort': resolve('node_modules/@huggingface/transformers/node_modules/onnxruntime-web/dist/ort.webgpu.bundle.min.mjs')
       }
     },
     plugins: [react()],

@@ -9,6 +9,7 @@ import { objectSelectTool } from './objectSelect'
 import { brushTool, blurTool, cloneTool, healTool, toneTool } from './paint'
 import { cropTool, gradientTool, shapeTool, typeTool, eyedropperTool, handTool, zoomTool } from './misc'
 import { penTool } from './pen'
+import { aiEraserTool } from './aiEraser'
 
 export interface ToolInfo {
   key: Tool
@@ -85,6 +86,14 @@ export const TOOLS: ToolInfo[] = [
     desc: '잡티·먼지를 칠하면 주변 그림으로 자연스럽게 메웁니다.',
     hint: '지우고 싶은 잡티 위를 칠하면 손을 뗄 때 주변으로 메웁니다. [ ]로 크기, Esc로 취소합니다.',
     handler: healTool
+  },
+  {
+    key: 'aiEraser',
+    label: 'AI 지우개',
+    shortcut: 'J',
+    desc: '지우고 싶은 사람·물건을 칠하면 AI 가 지우고 배경을 자연스럽게 채웁니다.',
+    hint: '지울 것 위를 빨간 형광펜처럼 칠하고 손을 떼면 AI 가 지우고 채웁니다. 덜 지워진 곳은 다시 칠하세요. [ ]로 크기를 바꿉니다.',
+    handler: aiEraserTool
   },
   {
     key: 'cloneStamp',

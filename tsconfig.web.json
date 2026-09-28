@@ -23,6 +23,9 @@
       ],
       "@renderer/*": [
         "src/renderer/src/*"
+      ],
+      "@sam-ort": [
+        "node_modules/@huggingface/transformers/node_modules/onnxruntime-common/dist/esm/index.d.ts"
       ]
     },
     "noUnusedLocals": true,

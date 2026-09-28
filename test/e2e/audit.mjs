@@ -74,7 +74,7 @@ try {
   await dlg('help', { kind: 'help' }, ['도구', '선택', '칠하기·고치기', '색 보정·필터', '레이어', '화면·파일', 'MCP'])
   await dlg('recover', { kind: 'recover', items: [{ id: 'x', name: '고양이 합성', path: null, savedAt: Date.now() }] })
   // 메뉴
-  for (const m of ['파일(F)', '편집(E)', '이미지(I)', '레이어(L)', '선택(S)', '필터(T)', '보기(V)', '도움말(H)']) {
+  for (const m of ['파일(F)', '편집(E)', '이미지(I)', '레이어(L)', '선택(S)', '필터(T)', '보기(V)', '간편 AI(A)', '도움말(H)']) {
     await page.getByRole('menubar').getByRole('menuitem', { name: m, exact: true }).click()
     await page.waitForTimeout(300)
     const paper = page.locator('.MuiMenu-paper').first()
@@ -91,6 +91,7 @@ try {
     'crop',
     'brush',
     'spotHealing',
+    'aiEraser',
     'cloneStamp',
     'blur',
     'dodge',

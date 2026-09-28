@@ -21,6 +21,7 @@ import PanToolOutlined from '@mui/icons-material/PanToolOutlined'
 import ZoomInRounded from '@mui/icons-material/ZoomInRounded'
 import SwapVertRounded from '@mui/icons-material/SwapVertRounded'
 import Brightness6Rounded from '@mui/icons-material/Brightness6Rounded'
+import AutoFixHighRounded from '@mui/icons-material/AutoFixHighRounded'
 import { editor, useEditor, type Tool } from '../editor/store'
 import { TOOLS } from '../tools'
 import { ui } from '../theme'
@@ -36,6 +37,7 @@ const ICONS: Record<string, JSX.Element> = {
   crop: <CropRounded />,
   brush: <BrushRounded />,
   spotHealing: <HealingRounded />,
+  aiEraser: <AutoFixHighRounded />,
   cloneStamp: <ContentCopyRounded />,
   blur: <WaterDropOutlined />,
   dodge: <Brightness6Rounded />,

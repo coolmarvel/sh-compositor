@@ -218,6 +218,22 @@ function BrushControls({
   )
 }
 
+/** AI 지우개 — 붓 크기 · 선택 영역을 바로 지우기 */
+function AiEraserHeader(): JSX.Element {
+  const size = useEditor((st) => st.settings.aiEraserSize)
+  const doc = useDoc()
+  return (
+    <>
+      <SliderControl label="크기" tooltip="[ ] 로 조절" value={size} min={4} max={1000} format={(v) => `${Math.round(v)}px`} onChange={(v) => editor.setSettings({ aiEraserSize: v })} />
+      <GDivider />
+      <Button variant="outlined" disabled={!doc?.selection?.bounds} onClick={() => void A.aiErase()}>
+        선택 영역 지우기
+      </Button>
+      <Hint>지울 것을 칠하고 손을 떼면 AI 가 지우고 배경을 채웁니다. 처음 한 번은 모델을 불러오느라 몇 초 걸립니다.</Hint>
+    </>
+  )
+}
+
 /** 개체 선택 — 감싸는 방식, 방금 잡은 개체의 테두리 확장/축소·부드럽게 (바로 적용) */
 function ObjectSelectHeader(): JSX.Element {
   const s = useEditor((st) => st.settings)
@@ -563,6 +579,9 @@ export default function ToolHeader(): JSX.Element {
           <BrushControls opacityLabel="불투명도" />
         </>
       )
+      break
+    case 'aiEraser':
+      body = <AiEraserHeader />
       break
     case 'cloneStamp':
       body = (

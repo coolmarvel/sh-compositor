@@ -1,7 +1,7 @@
 ---
 title: 배포 패키징 가이드
 created: 2026-09-21
-updated: 2026-09-23
+updated: 2026-09-28
 domain: packaging
 ---
 
@@ -19,12 +19,14 @@ domain: packaging
   `resources/sam/Xenova/slimsam-50-uniform/` 로 받고, onnxruntime-web 의 `ort-wasm-simd-threaded.asyncify.{mjs,wasm}` 을 `resources/sam/ort/` 로 복사한다.
   extraResources `resources/sam → sam`. 실행 중에는 main 의 `aimodel://assets/` 프로토콜로 서빙(개발: `<앱>/resources/sam`, 설치본: `resources/sam`) — 인터넷 불필요.
   `resources/sam/` 은 git 제외. 더 큰 fp32 가 필요하면 `SAM_FULL=1 npm run models`.
+- **AI 지우개 모델**: 같은 스크립트가 LaMa(OpenCV zoo 판 92MB, Apache-2.0)를 `resources/sam/inpaint/lama.onnx` 로 받는다 → `aimodel://assets/inpaint/lama.onnx` (ADR-0007).
+  일꾼 `inpaintWorker-*.js` 는 ORT 를 품고 있어 난독화에서 뺀다(`obfuscate.cjs` SKIP). main 이 `enable-features=SharedArrayBuffer` 를 켠다 — 배경 제거 일꾼은 스스로 지운다.
 
 ## 설치본에 싣는 것 (`build.files`)
 
 `out/**` + `package.json` 만. `!node_modules/**/*` 로 node_modules 는 싣지 않는다 — 화면 쪽 라이브러리는 vite 가 묶고, main·preload 는 Node 기본 모듈만 쓴다.
 main·preload 에서 npm 패키지를 import 하게 되면 이 규칙을 먼저 고칠 것(설치본에서 모듈을 못 찾아 시작 즉시 죽는다).
-모델은 extraResources: `bgrm-data`(212MB)·`sam`(60MB).
+모델은 extraResources: `bgrm-data`(212MB)·`sam`(약 150MB = SlimSAM 35MB + ORT wasm + LaMa 92MB).
 
 ## 난독화 (`scripts/obfuscate.cjs`, `npm run build` 에 연결)
 

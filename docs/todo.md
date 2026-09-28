@@ -1,7 +1,7 @@
 ---
 title: TODO
 created: 2026-09-21
-updated: 2026-09-23
+updated: 2026-09-28
 domain: development
 ---
 
@@ -12,10 +12,17 @@ domain: development
 
 ## P1 — 다음 릴리스에서 다뤄야 함
 
+- [ ] v1.2.1 설치본 사용자 테스트 → AI 지우개(J) 실제 사진에서 사람·창문 지우기 품질과 시간(목표 5초 안팎), 간편 AI 메뉴의 배경 흐리게·흰색·누끼 체감
+
 - [ ] v1.2.0 설치본 사용자 테스트 → 펜 도구(클릭·끌기·닫기)·퀵 마스크(Q)·브러시 팁 흩뿌리기·글자별 서식(구간 선택 후 굵게)·닷지/번 체감, 큰 사진 중간값 필터 속도
   + 이전부터 확인할 것: 큰 사진 리터칭·올가미 체감, 파일 덮어쓰기·탭 전환 중 저장(Windows 파일 잠금), 배경 제거 중 탭 바꾸기, 환경 설정 "실행 취소 메모리"·작업 내역 패널 MB 표시
 
 ## P2 — 가까운 로드맵
+
+- [ ] AI 지우개 고해상도 — 모델 입력이 512 라 큰 개체를 지우면 채운 부분이 흐리다. 결과에 원본 결(노이즈·선명도) 입히기 또는 타일 방식 검토 (`core/inpaint.ts`, ADR-0007)
+- [ ] AI 지우개 WebGPU — 소프트웨어 WebGPU 에서 출력이 틀려(전부 흰색) 뺐다. 실제 그래픽 카드에서 결과가 CPU 와 같은지 확인되면 켜서 1초 안팎으로 (`editor/inpaintWorker.ts`)
+- [ ] 개체 선택(SlimSAM)·배경 제거도 멀티스레드로 — SharedArrayBuffer 는 v1.2.1 에서 켰지만 둘은 1스레드 그대로. imgly 는 스레드 코드를 함수 문자열로 띄워 난독화 청크에서 깨지므로 그 청크를 난독화에서 빼야 한다
+- [ ] 서버·MCP AI 지우개 — onnxruntime-node 또는 onnxruntime-web(wasm)을 서버 작업 스레드에서. 지금은 capabilities.unsupported
 
 - [ ] MCP를 ChatGPT(커넥터)·OpenAI Agents SDK·Cursor 등 Claude 외 클라이언트에 연결해 확인 (HTTPS 공개 주소 필요). Claude Code 는 2026-09-23 확인
 - [ ] 서버 운영 한도 실측 — 40MP·동시 2작업·스레드 힙 512MB 는 기본값. 큰 문서 필터·내보내기의 최대 메모리와 동시성으로 정해 `SHC_*` 로 (`src/server/config.ts`)

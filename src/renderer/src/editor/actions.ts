@@ -56,7 +56,11 @@ import {
   type Doc,
   type Layer,
   type MatteRefine,
-  type BrushSettings
+  type BrushSettings,
+  type Bitmap,
+  DEFAULT_MATTE,
+  blurBackground,
+  fillBackground
 } from '@core/index'
 
 type BgOptions = { engine: 'offline' | 'online'; model?: 'isnet_fp16' | 'isnet' }
@@ -316,6 +320,109 @@ export async function removeBackground(refine: MatteRefine | null, opts: BgOptio
     if (!land(at, updateLayer(baked, l.id, { mask: { bitmap: { width: b.bitmap!.width, height: b.bitmap!.height, data }, enabled: true, linked: true } }), '배경 제거')) return
     editor.toast('ok', `배경을 레이어 마스크로 가렸습니다 (${opts.engine === 'online' ? '온라인 최신 모델' : '내장 모델'}). 마스크를 칠해 다듬을 수 있습니다.`)
   })
+}
+
+// ── 간편 AI (메뉴 "간편 AI" · 도구 레일 AI 지우개) — 일반 사용자용 한 번 누르기 기능 ──
+
+/** 활성 레이어를 문서 전체로 굽고 문서 좌표 마스크(0~255)를 레이어 좌표로 옮긴다 */
+function layerHole(d: Doc, id: string, docMask: Uint8Array): { baked: Doc; bmp: Bitmap; hole: Uint8Array } {
+  const baked = bakeLayer(d, id, { x: 0, y: 0, w: d.width, h: d.height })
+  const b = getLayer(baked, id)!
+  const bmp = b.bitmap!
+  const ox = Math.round(b.transform.x)
+  const oy = Math.round(b.transform.y)
+  const hole = new Uint8Array(bmp.width * bmp.height)
+  for (let y = 0; y < bmp.height; y++) {
+    const dy = y + oy
+    if (dy < 0 || dy >= d.height) continue
+    for (let x = 0; x < bmp.width; x++) {
+      const dx = x + ox
+      if (dx >= 0 && dx < d.width) hole[y * bmp.width + x] = docMask[dy * d.width + dx]
+    }
+  }
+  return { baked, bmp, hole }
+}
+
+/**
+ * AI 지우개 — 지울 곳(문서 크기 0~255, 없으면 선택 영역)을 지우고 주변에 맞게 새로 그려 채운다 (LaMa).
+ * 배경 제거(투명하게)와 달리 지운 자리가 그림으로 채워진다. 모델을 쓸 수 없으면 내용 인식 채우기로 대신한다.
+ */
+export async function aiErase(docHole?: Uint8Array): Promise<void> {
+  const d = doc()
+  if (!d) return
+  const mask = docHole ?? d.selection?.mask
+  if (!mask || (!docHole && !d.selection?.bounds)) return editor.toast('info', 'AI 지우개로 지울 곳을 칠하거나, 지울 것을 먼저 선택하세요.')
+  const l = pixelLayer(d, 'AI 지우개')
+  const at = capture()
+  if (!l || !at) return
+  await editor.busy('AI 지우개 준비 중…', async () => {
+    const { baked, bmp, hole } = layerHole(d, l.id, mask)
+    const { inpaintBitmap } = await import('./inpaint')
+    let data: Uint8ClampedArray | null
+    try {
+      data = await inpaintBitmap(bmp, hole, (label) => editor.set({ progress: { label } }), at.signal)
+    } catch (e) {
+      if (at.signal.aborted) return
+      // 모델이 없거나(개발 환경) 일꾼이 죽었으면 예전 방식으로라도 채운다
+      const px = new Uint8ClampedArray(bmp.data)
+      const target = new Uint8Array(hole.length)
+      for (let i = 0; i < hole.length; i++) target[i] = hole[i] >= 128 ? 1 : 0
+      if (!contentFill(px, target, bmp.width, bmp.height)) throw e
+      data = px
+      editor.toast('info', `AI 모델을 쓸 수 없어 내용 인식 채우기로 대신했습니다. (${e instanceof Error ? e.message : String(e)})`)
+    }
+    if (!data) return editor.toast('info', '지울 곳이 이 레이어 밖에 있습니다.')
+    // 선택으로 지웠으면 그 개체는 사라졌으니 선택도 푼다
+    land(at, { ...updateLayer(baked, l.id, { bitmap: { width: bmp.width, height: bmp.height, data }, shape: undefined }), selection: docHole ? d.selection : null }, 'AI 지우개')
+  })
+}
+
+/** 활성 레이어의 피사체 마스크 (레이어 크기) — 간편 배경 기능 공용 */
+async function subjectOfLayer(what: string): Promise<{ d: Doc; l: Layer; at: NonNullable<ReturnType<typeof capture>>; baked: Doc; bmp: Bitmap; mask: Uint8Array } | null> {
+  const d = doc()
+  if (!d) return null
+  const l = pixelLayer(d, what)
+  const at = capture()
+  if (!l || !at) return null
+  const engine = await pickEngine()
+  if (!engine) return null
+  const baked = bakeLayer(d, l.id, { x: 0, y: 0, w: d.width, h: d.height })
+  const bmp = getLayer(baked, l.id)!.bitmap!
+  const { subjectMask } = await import('./bgremove')
+  const mask = await subjectMask(bmp, DEFAULT_MATTE, { engine }, (label, value) => editor.set({ progress: { label, value } }), at.signal).catch((e) => {
+    if (at.signal.aborted) return null
+    throw e
+  })
+  return mask ? { d, l, at, baked, bmp, mask } : null
+}
+
+/** 배경 흐리게 (인물 사진처럼) — AI 로 피사체를 찾아 그 밖만 흐린다 */
+export async function portraitBlur(): Promise<void> {
+  await editor.busy('배경 흐리게 준비 중…', async () => {
+    const r = await subjectOfLayer('배경 흐리게')
+    if (!r) return
+    editor.set({ progress: { label: '배경을 흐리는 중…' } })
+    await new Promise((ok) => requestAnimationFrame(() => ok(null)))
+    const radius = Math.max(4, Math.round(Math.max(r.bmp.width, r.bmp.height) * 0.012))
+    const data = blurBackground(r.bmp, r.mask, radius)
+    land(r.at, { ...updateLayer(r.baked, r.l.id, { bitmap: { width: r.bmp.width, height: r.bmp.height, data }, shape: undefined }), selection: r.d.selection }, '배경 흐리게')
+  })
+}
+
+/** 배경을 흰색으로 (증명사진·상품 사진) — AI 로 피사체를 찾아 나머지를 흰색으로 */
+export async function whiteBackground(): Promise<void> {
+  await editor.busy('배경 바꾸기 준비 중…', async () => {
+    const r = await subjectOfLayer('배경을 흰색으로')
+    if (!r) return
+    const data = fillBackground(r.bmp, r.mask, [255, 255, 255])
+    land(r.at, { ...updateLayer(r.baked, r.l.id, { bitmap: { width: r.bmp.width, height: r.bmp.height, data }, shape: undefined }), selection: r.d.selection }, '배경을 흰색으로')
+  })
+}
+
+/** 배경 투명하게 (누끼) — 배경 제거를 기본 설정으로 한 번에 (세부 설정은 필터 ▸ 배경 제거) */
+export async function quickRemoveBackground(): Promise<void> {
+  const engine = await pickEngine()
+  if (engine) await removeBackground(DEFAULT_MATTE, { engine })
 }
 
 /**

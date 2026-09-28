@@ -58,6 +58,8 @@ fs.writeFileSync(
   QUAD,
   png(200, 100, (x, y) => (x < 100 ? (y < 50 ? [220, 40, 40, 255] : [40, 180, 60, 255]) : y < 50 ? [40, 60, 220, 255] : [240, 240, 240, 255]))
 )
+const SPOT = path.join(WORK, 'spot.png')
+fs.writeFileSync(SPOT, png(200, 150, (x, y) => ((x - 100) ** 2 + (y - 75) ** 2 <= 25 ** 2 ? [220, 40, 40, 255] : [40, 180, 90, 255])))
 
 // ── 하네스 ──
 const results = []
@@ -421,6 +423,34 @@ async function main() {
         )
       })
       await t('W14 콘솔 오류 없음 (WASM 실패 경고 제외)', async () => assert(errors.length === 0, errors.join('\n')))
+      await context.close()
+    }
+    // W16: AI 지우개 (LaMa) — 웹은 교차 출처 격리가 없어 1스레드로 돈다
+    {
+      const { context, page, errors } = await open([NO_PICKERS])
+      await t('W16 AI 지우개: 빨간 점을 칠하면 초록 배경으로 채워짐 (웹 1스레드)', async () => {
+        await openViaChooser(page, SPOT, () => press(page, 'Control+o'))
+        await press(page, 'j')
+        await press(page, 'j')
+        assert((await page.evaluate(() => window.__sc.editor.state.tool)) === 'aiEraser', 'tool')
+        await page.evaluate(() => window.__sc.editor.setSettings({ aiEraserSize: 64 }))
+        const n = (await docInfo(page)).undo
+        await drag(page, [
+          [98, 75],
+          [102, 75]
+        ])
+        await page.waitForFunction(
+          (n) => !window.__sc.editor.state.progress && (window.__sc.editor.tab.history.past.length > n || window.__sc.editor.state.toast?.kind === 'err'),
+          n,
+          { timeout: 180000 }
+        )
+        const toast = await page.evaluate(() => window.__sc.editor.state.toast)
+        assert((await docInfo(page)).undo === n + 1, `undo toast ${JSON.stringify(toast)}`)
+        const c = await px(page, 100, 75)
+        assert(c[1] > 120 && c[0] < 120, `center ${c}`)
+        assert(near(await px(page, 5, 5), [40, 180, 90, 255]), 'outside')
+      })
+      await t('W17 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n').slice(0, 1500)))
       await context.close()
     }
     // W15: 저장 공간 초과 → 안내

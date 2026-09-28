@@ -36,6 +36,7 @@ export type Tool =
   | 'crop'
   | 'brush'
   | 'spotHealing'
+  | 'aiEraser'
   | 'cloneStamp'
   | 'blur'
   | 'dodge'
@@ -87,6 +88,8 @@ export interface ToolSettings {
   toneExposure: number
   toneSaturate: boolean
   healMode: 'contentAware' | 'proximity'
+  /** AI 지우개 붓 지름 (문서 px) */
+  aiEraserSize: number
   cloneAligned: boolean
   cloneSampleAll: boolean
   gradientShape: 'linear' | 'radial'
@@ -133,6 +136,7 @@ export const DEFAULT_SETTINGS: ToolSettings = {
   wandContiguous: true,
   wandSampleAll: false,
   objectMode: 'rect',
+  aiEraserSize: 50,
   brush: DEFAULT_BRUSH,
   brushMode: 'paint',
   blurMode: 'blur',

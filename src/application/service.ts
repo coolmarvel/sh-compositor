@@ -163,7 +163,7 @@ export class DocumentService {
       importFormats: IMPORT_FORMATS,
       exportFormats: EXPORT_FORMATS,
       coordinates: '문서 픽셀, 왼쪽 위 원점. 레이어 배열은 아래 → 위.',
-      unsupported: ['문자 레이어 만들기·편집 (서버에 글꼴·캔버스 없음)', 'AI 배경 제거·피사체 선택·개체 선택 (브라우저 전용 모델)', 'WebP·HEIC·TIFF 가져오기/내보내기 (브라우저 디코더)'],
+      unsupported: ['문자 레이어 만들기·편집 (서버에 글꼴·캔버스 없음)', 'AI 배경 제거·피사체 선택·개체 선택·AI 지우개 (브라우저 전용 모델)', 'WebP·HEIC·TIFF 가져오기/내보내기 (브라우저 디코더)'],
       resampling: ['bilinear'],
       limits: {
         maxUploadBytes: this.limits.maxUploadBytes,

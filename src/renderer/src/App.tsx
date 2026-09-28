@@ -275,6 +275,8 @@ export default function App(): JSX.Element {
           if (k === 'b') editor.setSettings({ brushMode: 'paint' })
           // W: 마법봉 ↔ 개체 선택 (포토샵 도구 묶음처럼 누를 때마다 번갈아)
           if (k === 'w' && editor.state.tool === 'wand') return editor.setTool('objectSelect')
+          // J: 스팟 복구 ↔ AI 지우개 (포토샵 복구 도구 묶음처럼)
+          if (k === 'j' && editor.state.tool === 'spotHealing') return editor.setTool('aiEraser')
           editor.setTool(t)
         })
       }
@@ -519,6 +521,21 @@ export default function App(): JSX.Element {
             checked: skin === name
           }))
         }
+      ]
+    },
+    {
+      // 일반 사용자용 한 번 누르기 AI 기능 모음 (전문 기능은 각 메뉴에 그대로)
+      label: '간편 AI(A)',
+      items: [
+        { label: 'AI 지우개 (칠해서 지우고 배경 채우기)', shortcut: 'J', onClick: () => editor.setTool('aiEraser'), disabled: !has },
+        { label: '선택 영역을 AI로 지우기', onClick: () => void A.aiErase(), disabled: !pixel || !hasSel },
+        'sep',
+        { label: '배경 흐리게 (인물 사진처럼)', onClick: () => void A.portraitBlur(), disabled: !pixel },
+        { label: '배경을 흰색으로', onClick: () => void A.whiteBackground(), disabled: !pixel },
+        { label: '배경 투명하게 (누끼)', onClick: () => void A.quickRemoveBackground(), disabled: !pixel },
+        'sep',
+        { label: '피사체 선택', onClick: () => void A.selectSubject(), disabled: !has },
+        { label: '사진 자동 보정', onClick: () => A.quickAdjust('color'), disabled: !pixel }
       ]
     },
     {

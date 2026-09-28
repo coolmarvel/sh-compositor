@@ -3,6 +3,10 @@
  * (2026-09-21 사용자 제보: "피사체 분석 중"에서 막대가 멈춤). 라이브러리의 proxyToWorker 는 실제로 구현돼 있지 않아 직접 옮겼다.
  * 모델은 일꾼 안에 남아 있어 두 번째부터는 불러오기가 빠르다.
  */
+// 데스크톱은 AI 지우개 때문에 SharedArrayBuffer 를 켰다(main). imgly 는 그것을 보면 스레드를 코어 수만큼 띄우는데,
+// 스레드 코드를 함수 문자열로 떠서 띄우므로 난독화된 청크에서 깨진다 (2026-09-28 E2E P4). 이 일꾼에서는 숨겨 예전처럼 1스레드로.
+Reflect.deleteProperty(globalThis, 'SharedArrayBuffer')
+
 type Req = { id: number; png: Uint8Array; engine: 'offline' | 'online'; model?: 'isnet_fp16' | 'isnet'; publicPath: string }
 
 self.onmessage = async (e: MessageEvent<Req | { cancel: number }>) => {

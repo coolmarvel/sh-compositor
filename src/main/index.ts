@@ -4,6 +4,10 @@ import { join, basename, extname } from 'path'
 import { readFile, readdir, stat, mkdir, rm } from 'fs/promises'
 import { pathToFileURL } from 'url'
 
+// AI 지우개(LaMa)의 onnxruntime 멀티스레드 — file:// 창은 교차 출처 격리가 안 돼 SharedArrayBuffer 가 꺼져 있다.
+// 로컬 내용만 띄우는 앱이라 켠다 (2026-09-28 측정: 한 번 지우기 CPU 1스레드 15.5초 → 8스레드 4.7초, 결과 동일)
+app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer')
+
 // ── AI 배경 제거 모델 서빙 (bgrm://) — 파일 변환기와 같은 방식 (완전 오프라인) ──
 protocol.registerSchemesAsPrivileged([
   { scheme: 'bgrm', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },

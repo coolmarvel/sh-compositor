@@ -90,14 +90,14 @@ npm run typecheck    # 타입 검사 (node + web)
 npm test             # core·application·서버 설정 순수 로직 테스트 (node:test)
 npm run build        # electron-vite build + 난독화 (scripts/obfuscate.cjs)
 npm run format       # Prettier (printWidth 200)
-npm run e2e [-- A B …]  # 실제 앱 E2E 129건 — Xvfb 가상 화면에서 (사용자 화면에 창이 뜨지 않음). build 후
+npm run e2e [-- A B …]  # 실제 앱 E2E 135건 — Xvfb 가상 화면에서 (사용자 화면에 창이 뜨지 않음). build 후
 npm run build:web      # 웹 로컬 편집기 → out/web (dev:web 5190 · preview:web 5191)
-npm run e2e:web        # 웹 E2E 15건 (헤드리스 Chromium, build:web 후)
+npm run e2e:web        # 웹 E2E 17건 (헤드리스 Chromium, build:web 후)
 npm run build:server   # headless 서버·MCP → out/server/index.mjs (SHC_TOKENS=… npm run server · --stdio)
-npm run e2e:mcp        # 서버·MCP E2E 23건 (공식 SDK 클라이언트, 도구 51개 전부 호출, build:server 후)
+npm run e2e:mcp        # 서버·MCP E2E 25건 (공식 SDK 클라이언트, 도구 58개 전부 호출, build:server 후)
 npm run perf           # 체감 성능 (PERF_SIZE=4000x3000 PERF_LAYERS=5 PERF_PROFILE=1)
 npm run audit -- <dir>  # 모든 대화상자·메뉴·도구 줄 스크린샷 (문구·줄바꿈 검수)
-npm run models       # AI 개체 선택 모델(SlimSAM q8 35MB)·ORT wasm → resources/sam (git 제외, dist:win 이 먼저 부름)
+npm run models       # AI 개체 선택 모델(SlimSAM q8 35MB)·AI 지우개(LaMa 92MB)·ORT wasm → resources/sam (git 제외, dist:win 이 먼저 부름)
 npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서 Wine)
 ```
 
@@ -115,6 +115,7 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 - **웹·서버**: `renderer/src/platform/{index,web,idb}.ts`(window.api 브라우저 구현) · `vite.web.config.ts` · `src/server/{main,http,mcp,auth,config,workerRunner,taskWorker}.ts` (가이드 `docs/guides/web-mcp.md`)
 - 도구: `tools/{move,select,paint,misc}.ts` + 목록·단축키·설명 `tools/index.ts`
 - PSD: `core/doc/psd.ts`(ag-psd, 테스트 `test/psd.test.ts`) · 안내선 `editor/guides.ts`+`components/Rulers.tsx` · 도형 `editor/shape.ts` · 일꾼 `editor/{packWorker,bgremoveWorker,samWorker}.ts`
+- **AI 지우개·간편 AI(v1.2.1, ADR-0007)**: 앞뒤 처리 `core/inpaint.ts`(넓히기·정사각 자르기·512 맞춤·섞기, `blurBackground`·`fillBackground`) + 일꾼 `editor/inpaintWorker.ts`(LaMa, ORT 별칭 `@sam-ort`) + `editor/inpaint.ts` + `tools/aiEraser.ts`(J) · 동작 `actions.ts aiErase/portraitBlur/whiteBackground/quickRemoveBackground` · 메뉴 `App.tsx` "간편 AI(A)"
 - **개체 선택(AI)**: `editor/objectSelect.ts`(임베딩 캐시·프롬프트 변환·후보 고르기·다듬기) + `editor/samWorker.ts`(transformers.js SlimSAM) + `tools/objectSelect.ts`(사각형·올가미·칠하기·클릭)
 - P3 추가: 조정 `core/adjust2.ts`(흑백·색상 균형·활기·포스터화·한계값) · 필터 `core/filters.ts`(언샤프·하이 패스·모자이크·중간값) · 외부 광선 `core/effects.ts` · `panels/HistogramPanel.tsx` · 가장자리 다듬기 `DialogHost RefineEdgeDialog`
 - 패널: `panels/{LayersPanel,HistoryPanel,SwatchesPanel,NavigatorPanel,PanelTabs}.tsx` · 보기 계산 `editor/view.ts` · 커서 `editor/cursor.ts`
@@ -130,6 +131,9 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 - 개체 선택 모델(SlimSAM ONNX)에는 **상자 입력이 없다** — 상자·올가미는 양성 점 1개(영역 안쪽 깊은 곳) + 영역 바로 밖 음성 점 8개로 바꿔 넣는다(라벨 2/3 상자 흉내는 뒤집힌 마스크).
   후보 3개 중 고르기: 양성 점을 덮고 음성 점을 피하는 후보만 → 영역이 있으면 영역 안 85% 이상·확신도 0.2 이내에서 가장 큰 것, 점만 있으면 화면 절반 넘는 후보 빼고 확신도 최고 (`decodeAndPick`).
   모델·ORT wasm 은 CDN 이 아니라 `aimodel://assets/`(main `serveDir`, CSP `aimodel:`) — `resources/sam` 이 없으면 `npm run models`.
+- **SharedArrayBuffer 는 main 에서 켠다**(AI 지우개 ORT 멀티스레드, v1.2.1). imgly(배경 제거)는 그걸 보면 코어 수만큼 스레드를 띄우고 스레드 코드를 함수 문자열로 떠서 난독화 청크에서 `ReferenceError` 로 죽는다 → `bgremoveWorker.ts` 첫 줄에서 지운다. 새 ONNX 라이브러리는 스레드 동작 확인.
+- AI 지우개 모델은 **LaMa**(OpenCV 판 92MB). MI-GAN 은 사람을 지우면 흰 얼룩이 남는다. WebGPU 는 소프트웨어 GPU 에서 결과가 전부 흰색이라 뺐다 — 켜려면 실제 GPU 로 CPU 와 같은지 먼저 확인.
+- E2E 에서 마지막 작업 이름은 `tab.history.label` (`past.at(-1).label` 은 그 이전 단계 이름).
 - 설치본에 node_modules 를 싣지 않는다(`build.files` `!node_modules/**/*`, v1.0.2 에서 설치 폴더 약 1.2GB → 597MB). main·preload 는 Node 기본 모듈만 import 할 것.
 - `npm i`(다른 패키지 설치)를 하면 `--no-save playwright` 가 지워진다 → E2E 전에 다시 설치.
 - 미리보기는 반드시 `editor.setPreview()`(만든 문서에 묶임) — `set({preview})` 로 넣으면 문서가 바뀐 뒤에도 옛 미리보기가 그려진다 (배경 제거 미반영 사고).

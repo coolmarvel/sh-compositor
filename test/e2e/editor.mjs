@@ -1835,6 +1835,86 @@ groups.O = async () => {
   await closeApp(app)
 }
 
+// P) 간편 AI — AI 지우개(LaMa)·선택 영역 지우기·배경 흐리게·흰 배경 (실모델)
+groups.P = async () => {
+  const { app, page, errors } = await launch()
+  await openFile(app, page, 'subject.png') // 초록 바탕 + 가운데 빨간 원 (반지름 40)
+  const isGreen = (c) => c[1] > 120 && c[0] < 120
+  const label = () => page.evaluate(() => window.__sc.editor.tab.history.label)
+  const toastInfo = () => page.evaluate(() => JSON.stringify(window.__sc.editor.state.toast))
+  const waitDone = (n) =>
+    page.waitForFunction((n) => !window.__sc.editor.state.progress && (window.__sc.editor.tab.history.past.length > n || window.__sc.editor.state.toast?.kind === 'err'), n, { timeout: 180000 })
+  await t('P1 J 키: 스팟 복구 ↔ AI 지우개', async () => {
+    await press(page, 'j')
+    assert((await docInfo(page)).tool === 'spotHealing', 'heal')
+    await press(page, 'j')
+    assert((await docInfo(page)).tool === 'aiEraser', 'ai eraser')
+  })
+  await t('P2 AI 지우개: 빨간 원을 칠하면 지워지고 초록 배경으로 채워짐 (한 단계, 화면 멈춤 없음)', async () => {
+    await page.evaluate(() => {
+      window.__lt = []
+      new PerformanceObserver((l) => l.getEntries().forEach((e) => window.__lt.push(e.duration))).observe({ type: 'longtask' })
+      window.__sc.editor.setSettings({ aiEraserSize: 100 })
+    })
+    const n = (await docInfo(page)).undo
+    await drag(page, [
+      [96, 75],
+      [104, 75]
+    ])
+    await waitDone(n)
+    const d = await docInfo(page)
+    assert(d.undo === n + 1, `undo ${n} → ${d.undo} toast ${await toastInfo()}`)
+    for (const [x, y] of [
+      [100, 75],
+      [70, 60],
+      [125, 95]
+    ]) {
+      const c = await px(page, x, y)
+      assert(isGreen(c), `(${x},${y}) ${c}`)
+    }
+    assert(near(await px(page, 5, 5), [40, 180, 90, 255]), 'outside unchanged')
+    assert((await label()) === 'AI 지우개', await label())
+    const worst = await page.evaluate(() => Math.max(0, ...window.__lt))
+    assert(worst < 800, `화면 스레드가 ${Math.round(worst)}ms 멈춤`)
+    await gpuMatchesCpu(page)
+  })
+  await t('P3 간편 AI ▸ 선택 영역을 AI로 지우기 (선택은 풀림)', async () => {
+    await press(page, 'Control+z')
+    assert(!isGreen(await px(page, 100, 75)), 'undo restored red')
+    await press(page, 'm')
+    await drag(page, [
+      [52, 27],
+      [148, 123]
+    ])
+    const n = (await docInfo(page)).undo
+    await menu(page, '간편 AI(A)', '선택 영역을 AI로 지우기')
+    await waitDone(n)
+    assert(isGreen(await px(page, 100, 75)), `center ${await px(page, 100, 75)} toast ${await toastInfo()}`)
+    assert((await docInfo(page)).sel === null, 'selection cleared')
+  })
+  await t('P4 간편 AI ▸ 배경을 흰색으로 (내장 모델)', async () => {
+    await press(page, 'Control+z')
+    await page.evaluate(() => localStorage.setItem('sc.bgMode', 'offline'))
+    const n = (await docInfo(page)).undo
+    await menu(page, '간편 AI(A)', '배경을 흰색으로')
+    await waitDone(n)
+    const bg = await px(page, 5, 5)
+    const fg = await px(page, 100, 75)
+    assert(near(bg, [255, 255, 255, 255], 12) && fg[0] > 180 && fg[1] < 90, `bg ${bg} fg ${fg} toast ${await toastInfo()}`)
+  })
+  await t('P5 간편 AI ▸ 배경 흐리게: 피사체는 그대로, 한 단계', async () => {
+    await press(page, 'Control+z')
+    const n = (await docInfo(page)).undo
+    await menu(page, '간편 AI(A)', '배경 흐리게')
+    await waitDone(n)
+    assert((await label()) === '배경 흐리게', `${await label()} toast ${await toastInfo()}`)
+    assert(near(await px(page, 100, 75), [220, 40, 40, 255], 6), `subject ${await px(page, 100, 75)}`)
+    assert(isGreen(await px(page, 5, 5)), 'bg stays green')
+  })
+  await t('P6 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n').slice(0, 1500)))
+  await closeApp(app)
+}
+
 const order = ONLY.length ? ONLY : Object.keys(groups)
 for (const g of order) {
   console.log(`[${g}]`)

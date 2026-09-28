@@ -443,6 +443,6 @@ export const TOOL_CATALOG: ToolDoc[] = [
 /** 서버에서 할 수 없는 편집기 기능 (사용 설명서·capabilities 에 같은 문구) */
 export const UNSUPPORTED_ON_SERVER = [
   '문자 레이어 만들기·편집 (서버에 글꼴·캔버스 없음 — PSD 의 문자는 픽셀로 옵니다)',
-  'AI 배경 제거·피사체 선택·개체 선택 (브라우저 전용 모델)',
+  'AI 배경 제거·피사체 선택·개체 선택·AI 지우개 (브라우저 전용 모델)',
   'WebP·HEIC·TIFF 가져오기와 WebP 내보내기 (브라우저 디코더. JPEG 은 v1.2 부터 서버에서도 됩니다)'
 ]
