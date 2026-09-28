@@ -451,7 +451,7 @@ groups.C = async () => {
   })
   await t('C7 레이어 마스크 + 검정 칠 → 가려짐', async () => {
     await page.evaluate(() => window.__sc.editor.set({ fg: [0, 0, 0] }))
-    await press(page, 'q')
+    await menu(page, '레이어(L)', '마스크 추가 (모두 보이기)', '레이어 마스크') // v1.2: Q 는 퀵 마스크
     let d = await docInfo(page)
     const top = d.layers[d.layers.length - 1]
     assert(top.mask, 'mask')
@@ -972,7 +972,7 @@ groups.I = async () => {
       d.layers.some((l) => l.kind === 'group'),
       'group'
     )
-    await press(page, 'q')
+    await menu(page, '레이어(L)', '마스크 추가 (모두 보이기)', '레이어 마스크') // v1.2: Q 는 퀵 마스크
     d = await docInfo(page)
     assert(d.layers.find((l) => l.kind === 'group').mask, 'group mask')
     await page.evaluate(() => window.__sc.editor.set({ fg: [0, 0, 0] }))
@@ -1640,6 +1640,198 @@ groups.N = async () => {
     await dlg.waitFor({ state: 'detached' })
   })
   await t('N5 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n')))
+  await closeApp(app)
+}
+
+// O) v1.2 — 닷지·번·스펀지, 색상 범위, 퀵 마스크, 브러시 팁, 그라데이션 덮기·경사와 엠보스, 조정 레이어 5종, 펜·패스·벡터 마스크, 글자별 서식
+groups.O = async () => {
+  const { app, page, errors } = await launch()
+  await openFile(app, page, 'subject.png') // 초록 바탕 [40,180,90] + 빨간 원 [220,40,40] (중심 100,75 반지름 40)
+  const lum = (v) => (v[0] + v[1] + v[2]) / 3
+  await t('O1 닷지·번 (O): 끌면 밝아지고, 번으로 바꾸면 어두워짐 (GPU = CPU)', async () => {
+    await press(page, 'o')
+    assert((await docInfo(page)).tool === 'dodge', 'tool')
+    await page.evaluate(() => {
+      const e = window.__sc.editor
+      e.setSettings({ toneMode: 'dodge', toneRange: 'midtones', toneExposure: 80, brush: { ...e.state.settings.brush, size: 20, hardness: 1 } })
+    })
+    const before = await px(page, 30, 20)
+    await drag(page, [
+      [10, 20],
+      [50, 20]
+    ])
+    const after = await px(page, 30, 20)
+    assert(lum(after) > lum(before) + 10, `dodge ${before} → ${after}`)
+    await page.getByRole('button', { name: '번 (어둡게)', exact: true }).click()
+    await drag(page, [
+      [10, 130],
+      [50, 130]
+    ])
+    const burned = await px(page, 30, 130)
+    assert(lum(burned) < lum(before) - 10, `burn ${before} → ${burned}`)
+    await page.getByRole('button', { name: '스펀지 (채도)', exact: true }).click()
+    await drag(page, [
+      [150, 130],
+      [190, 130]
+    ])
+    const sp = await px(page, 170, 130)
+    assert(Math.max(...sp.slice(0, 3)) - Math.min(...sp.slice(0, 3)) < 180 - 40, `sponge ${sp}`)
+    await gpuMatchesCpu(page)
+  })
+  await t('O2 색상 범위: 전경색(빨강) 기준 → 원만 선택', async () => {
+    await page.evaluate(() => window.__sc.editor.set({ fg: [220, 40, 40] }))
+    await menu(page, '선택(S)', '색상 범위…')
+    const dlg = page.getByRole('dialog')
+    await dlg.getByText('허용치', { exact: true }).waitFor()
+    await dialogOk(page)
+    const d = await docInfo(page)
+    assert(d.sel && d.sel.w >= 76 && d.sel.w <= 84 && d.sel.h >= 76 && d.sel.h <= 84, JSON.stringify(d.sel))
+  })
+  await t('O3 퀵 마스크 (Q): 브러시로 칠하면 선택에 더해짐, 지우개로 빠짐', async () => {
+    await press(page, 'q')
+    assert(await page.evaluate(() => window.__sc.editor.state.quickMask), 'quick mask on')
+    await press(page, 'b')
+    await page.evaluate(() => {
+      const e = window.__sc.editor
+      e.setSettings({ brush: { ...e.state.settings.brush, size: 16, hardness: 1, opacity: 1 } })
+    })
+    await drag(page, [
+      [20, 130],
+      [40, 130]
+    ])
+    let d = await docInfo(page)
+    assert(d.sel && d.sel.y + d.sel.h >= 136 && d.sel.x <= 14, `add ${JSON.stringify(d.sel)}`)
+    await press(page, 'e')
+    await drag(page, [
+      [10, 130],
+      [50, 130]
+    ])
+    d = await docInfo(page)
+    assert(d.sel && d.sel.y + d.sel.h <= 120, `erase ${JSON.stringify(d.sel)}`)
+    await press(page, 'q')
+    assert(!(await page.evaluate(() => window.__sc.editor.state.quickMask)), 'quick mask off')
+    assert((await page.evaluate(() => window.__sc.editor.tab.history.label)) === '퀵 마스크', 'history label')
+    await press(page, 'Control+d')
+    await gpuMatchesCpu(page)
+  })
+  await t('O4 브러시 설정 대화상자: 미리보기, 사각 팁으로 칠하기', async () => {
+    await press(page, 'b')
+    await page.getByText('브러시 설정…', { exact: true }).click()
+    const dlg = page.getByRole('dialog')
+    await dlg.getByLabel('브러시 미리보기').waitFor()
+    await dlg.getByText('팁 모양').waitFor()
+    await page.waitForTimeout(200)
+    // 견본 획이 실제로 그려졌는지 (MUI Portal 뒤에 마운트되는 캔버스 — v1.2.0 사고)
+    const drawn = await dlg.getByLabel('브러시 미리보기').evaluate((c) => {
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data
+      let dark = 0
+      for (let i = 0; i < d.length; i += 4) if (d[i] < 128 && d[i + 3] > 0) dark++
+      return dark
+    })
+    assert(drawn > 1000, `preview dark px ${drawn}`)
+    await page.keyboard.press('Escape')
+    await dlg.waitFor({ state: 'detached' })
+    await page.evaluate(() => {
+      const e = window.__sc.editor
+      e.set({ fg: [0, 0, 255] })
+      e.setSettings({
+        brush: { ...e.state.settings.brush, size: 12, hardness: 1, opacity: 1, tip: { shape: 'square', angle: 0, roundness: 1, spacing: 0.1, scatter: 0, sizeJitter: 0, opacityJitter: 0 } }
+      })
+    })
+    await drag(page, [
+      [60, 140],
+      [140, 140]
+    ])
+    const v = await px(page, 100, 140)
+    assert(v[2] > 200 && v[0] < 40, `square tip ${v}`)
+    await page.evaluate(() => {
+      const e = window.__sc.editor
+      e.setSettings({ brush: { ...e.state.settings.brush, tip: undefined } })
+    })
+  })
+  await t('O5 그라데이션 덮기 + 경사와 엠보스 (효과 대화상자 탭)', async () => {
+    await menu(page, '레이어(L)', '효과 설정…', '레이어 효과')
+    const dlg = page.getByRole('dialog')
+    await dlg.getByRole('tab', { name: '그라데이션 덮기' }).click()
+    await dlg.getByText('사용').first().click()
+    await dlg.getByRole('tab', { name: '경사와 엠보스' }).click()
+    await dlg.getByText('사용').first().click()
+    await dialogOk(page)
+    const fx = await page.evaluate(() => {
+      const l = window.__sc.editor.doc.layers[0]
+      return { g: l.effects?.gradientOverlay?.enabled, b: l.effects?.bevel?.enabled }
+    })
+    assert(fx.g && fx.b, JSON.stringify(fx))
+    await gpuMatchesCpu(page, 12)
+    await press(page, 'Control+z')
+  })
+  await t('O6 조정 레이어: 한계값 → 흑백, 활기 → 채도 (GPU = CPU)', async () => {
+    await menu(page, '레이어(L)', '한계값…', '새 조정 레이어')
+    await page.getByRole('dialog').getByText('경계').waitFor()
+    await dialogOk(page)
+    const v = await px(page, 100, 75)
+    assert((v[0] === 0 || v[0] === 255) && v[0] === v[1] && v[1] === v[2], `threshold ${v}`)
+    await gpuMatchesCpu(page)
+    await press(page, 'Control+z')
+    await menu(page, '레이어(L)', '활기…', '새 조정 레이어')
+    await page.getByRole('dialog').getByLabel('활기').first().fill('80')
+    await page.waitForTimeout(150)
+    await dialogOk(page)
+    const d = await docInfo(page)
+    assert(
+      d.layers.some((l) => l.kind === 'adjustment'),
+      'adj'
+    )
+    await gpuMatchesCpu(page)
+    await press(page, 'Control+z')
+  })
+  await t('O7 펜 (P): 클릭 3번 + 첫 앵커 = 닫힌 패스, 패스 패널에서 선택·벡터 마스크', async () => {
+    await page.evaluate(() => {
+      const e = window.__sc.editor
+      e.quiet({ ...e.doc, activeId: e.doc.layers[0].id })
+    })
+    await press(page, 'p')
+    await click(page, 20, 20)
+    await click(page, 80, 20)
+    await click(page, 50, 60)
+    await click(page, 20, 20)
+    const paths = await page.evaluate(() => window.__sc.editor.doc.paths)
+    assert(paths?.length === 1 && paths[0].subpaths[0].closed && paths[0].subpaths[0].anchors.length === 3, JSON.stringify(paths))
+    await page.getByRole('tab', { name: '패스' }).click()
+    await page.getByRole('option', { name: /패스 1/ }).waitFor()
+    await page.getByRole('button', { name: '패스를 선택으로 (Shift: 더하기, Alt: 빼기)' }).click()
+    const sel = (await docInfo(page)).sel
+    assert(sel && sel.x <= 20 && sel.x + sel.w >= 80 && sel.y + sel.h >= 60, JSON.stringify(sel))
+    await press(page, 'Control+d')
+    await page.getByRole('button', { name: '활성 레이어의 벡터 마스크로' }).click()
+    const vm = await page.evaluate(() => window.__sc.editor.doc.layers[0].vectorMask)
+    assert(vm?.enabled && vm.subpaths.length === 1, JSON.stringify(vm))
+    const out = await px(page, 5, 140)
+    const inside = await px(page, 50, 30)
+    assert(out[3] === 0 && inside[3] === 255, `vector mask ${out} ${inside}`)
+    await gpuMatchesCpu(page)
+    await menu(page, '레이어(L)', '벡터 마스크 떼기', '레이어 마스크')
+    assert(!(await page.evaluate(() => window.__sc.editor.doc.layers[0].vectorMask)), 'removed')
+    await page.getByRole('button', { name: '패스 삭제' }).click()
+    assert(!(await page.evaluate(() => window.__sc.editor.doc.paths?.length)), 'path deleted')
+    await page.getByRole('tab', { name: '작업 내역' }).click()
+  })
+  await t('O8 글자별 서식: 편집 중 구간을 선택하고 굵게 → runs', async () => {
+    await press(page, 't')
+    await click(page, 100, 100)
+    const ta = page.getByTestId('text-editor')
+    await ta.waitFor()
+    await ta.fill('ABCD')
+    await ta.evaluate((el) => {
+      el.setSelectionRange(0, 2)
+    })
+    await page.getByRole('button', { name: '굵게', exact: true }).click()
+    await ta.press('Control+Enter')
+    await page.waitForTimeout(250)
+    const tl = await page.evaluate(() => window.__sc.editor.doc.layers.find((l) => l.kind === 'text'))
+    assert(tl?.text?.runs?.length >= 1 && tl.text.runs[0].start === 0 && tl.text.runs[0].end === 2 && tl.text.runs[0].bold === true, JSON.stringify(tl?.text?.runs))
+  })
+  await t('O9 콘솔 오류 없음', async () => assert(errors.length === 0, errors.join('\n')))
   await closeApp(app)
 }
 

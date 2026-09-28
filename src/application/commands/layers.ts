@@ -24,14 +24,15 @@ import { identityTransform } from '../../core/doc/transform'
 import { bakeLayer, editPixels, selWeight, layerViaCopy } from '../../core/doc/pixels'
 import { gaussianBlur } from '../../core/filters'
 import { DEFAULT_ADJUST, type Adjustments } from '../../core/adjust'
-import { DEFAULT_EFFECTS, DEFAULT_GLOW, type LayerEffects } from '../../core/effects'
+import { DEFAULT_MORE } from '../../core/adjust2'
+import { DEFAULT_EFFECTS, DEFAULT_GLOW, DEFAULT_GRADIENT_OVERLAY, DEFAULT_BEVEL, type LayerEffects } from '../../core/effects'
 import { MAX_SIDE } from '../../core/limits'
 import { renderShape } from '../../core/shape'
 import { invalid, unsupported, CommandError } from '../errors'
 import { object, onlyKeys, int, num, bool, str, oneOf, id, type Obj } from '../validate'
 import type { DocCommand } from './types'
 import { requireLayer, layerIds, colorOf } from './types'
-import { adjustmentsOf } from './adjust'
+import { adjustmentsOf, moreOf } from './adjust'
 
 const BLEND_KEYS = BLEND_MODES.map((b) => b.key)
 const hex = (c: [number, number, number]): string => '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('')
@@ -39,8 +40,14 @@ const hex = (c: [number, number, number]): string => '#' + c.map((v) => v.toStri
 /** 레이어 효과 입력 (부분) → 전체 LayerEffects (있던 값 위에 덮음) */
 export function effectsOf(raw: unknown, base: LayerEffects | null): LayerEffects {
   const o = object(raw, 'effects')
-  onlyKeys(o, ['stroke', 'shadow', 'innerShadow', 'overlay', 'outerGlow'], 'effects')
-  const cur: LayerEffects = { ...DEFAULT_EFFECTS, ...base, outerGlow: base?.outerGlow ?? DEFAULT_GLOW }
+  onlyKeys(o, ['stroke', 'shadow', 'innerShadow', 'overlay', 'outerGlow', 'gradientOverlay', 'bevel'], 'effects')
+  const cur: LayerEffects = {
+    ...DEFAULT_EFFECTS,
+    ...base,
+    outerGlow: base?.outerGlow ?? DEFAULT_GLOW,
+    gradientOverlay: base?.gradientOverlay ?? DEFAULT_GRADIENT_OVERLAY,
+    bevel: base?.bevel ?? DEFAULT_BEVEL
+  }
   const part = (key: keyof LayerEffects, keys: string[], fn: (p: Obj, prev: Obj) => Obj): void => {
     if (o[key] === undefined) return
     const p = object(o[key], `effects.${key}`)
@@ -76,6 +83,36 @@ export function effectsOf(raw: unknown, base: LayerEffects | null): LayerEffects
     color: color(p, prev),
     opacity: num(p, 'opacity', 0, 1, prev.opacity as number)!
   }))
+  part('gradientOverlay', ['enabled', 'style', 'angle', 'colors', 'opacity', 'scale', 'reverse'], (p, prev) => {
+    let colors = prev.colors as [string, string]
+    if (p.colors !== undefined) {
+      if (!Array.isArray(p.colors) || p.colors.length !== 2) throw invalid('effects.gradientOverlay.colors 는 #rrggbb 두 개여야 합니다.', { field: 'colors' })
+      colors = [hex(colorOf({ c: p.colors[0] }, 'c')), hex(colorOf({ c: p.colors[1] }, 'c'))]
+    }
+    return {
+      enabled: bool(p, 'enabled', prev.enabled as boolean)!,
+      style: oneOf(p, 'style', ['linear', 'radial'] as const, prev.style as 'linear')!,
+      angle: num(p, 'angle', -360, 360, prev.angle as number)!,
+      colors,
+      opacity: num(p, 'opacity', 0, 1, prev.opacity as number)!,
+      scale: num(p, 'scale', 10, 150, prev.scale as number)!,
+      reverse: bool(p, 'reverse', prev.reverse as boolean)!
+    }
+  })
+  part('bevel', ['enabled', 'style', 'size', 'depth', 'soften', 'angle', 'altitude', 'direction', 'highlightColor', 'highlightOpacity', 'shadowColor', 'shadowOpacity'], (p, prev) => ({
+    enabled: bool(p, 'enabled', prev.enabled as boolean)!,
+    style: oneOf(p, 'style', ['inner', 'outer', 'emboss'] as const, prev.style as 'inner')!,
+    size: num(p, 'size', 1, 250, prev.size as number)!,
+    depth: num(p, 'depth', 1, 500, prev.depth as number)!,
+    soften: num(p, 'soften', 0, 50, prev.soften as number)!,
+    angle: num(p, 'angle', -360, 360, prev.angle as number)!,
+    altitude: num(p, 'altitude', 0, 90, prev.altitude as number)!,
+    direction: oneOf(p, 'direction', ['up', 'down'] as const, prev.direction as 'up')!,
+    highlightColor: p.highlightColor === undefined ? (prev.highlightColor as string) : hex(colorOf(p, 'highlightColor')),
+    highlightOpacity: num(p, 'highlightOpacity', 0, 1, prev.highlightOpacity as number)!,
+    shadowColor: p.shadowColor === undefined ? (prev.shadowColor as string) : hex(colorOf(p, 'shadowColor')),
+    shadowOpacity: num(p, 'shadowOpacity', 0, 1, prev.shadowOpacity as number)!
+  }))
   return cur
 }
 
@@ -97,6 +134,7 @@ export interface LayerUpdateInput {
   lock?: LayerLock
   effects?: unknown
   adjustment?: unknown
+  more?: unknown
   shape?: Obj
   maskEnabled?: boolean
   maskLinked?: boolean
@@ -122,6 +160,7 @@ export const layerUpdateCommand: DocCommand<LayerUpdateInput> = {
       'lock',
       'effects',
       'adjustment',
+      'more',
       'shape',
       'maskEnabled',
       'maskLinked'
@@ -156,6 +195,10 @@ export const layerUpdateCommand: DocCommand<LayerUpdateInput> = {
     if (o.adjustment !== undefined) {
       adjustmentsOf(o.adjustment, DEFAULT_ADJUST)
       out.adjustment = o.adjustment
+    }
+    if (o.more !== undefined) {
+      moreOf(o.more, DEFAULT_MORE)
+      out.more = o.more
     }
     if (o.shape !== undefined) {
       const s = object(o.shape, 'shape')
@@ -208,6 +251,12 @@ export const layerUpdateCommand: DocCommand<LayerUpdateInput> = {
     if (i.adjustment !== undefined) {
       if (l.kind !== 'adjustment' || !l.adjustment) throw invalid('adjustment 는 조정 레이어에만 줄 수 있습니다.', { layerId: l.id })
       patch.adjustment = { ...l.adjustment, settings: adjustmentsOf(i.adjustment, l.adjustment.settings) }
+      changed.push('조정 설정')
+    }
+    if (i.more !== undefined) {
+      if (l.kind !== 'adjustment' || !l.adjustment?.more) throw invalid('more 는 흑백·색상 균형·활기·포스터화·한계값 조정 레이어에만 줄 수 있습니다.', { layerId: l.id })
+      const m = moreOf(i.more, (patch.adjustment ?? l.adjustment).more!)
+      patch.adjustment = { ...(patch.adjustment ?? l.adjustment), kind: m.kind, more: m }
       changed.push('조정 설정')
     }
     if (i.maskEnabled !== undefined || i.maskLinked !== undefined) {

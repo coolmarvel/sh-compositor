@@ -6,8 +6,9 @@ import type { Doc, Bitmap } from '../../core/doc/types'
 import { getLayer, updateLayer } from '../../core/doc/ops'
 import { bakeLayer, editPixels, fillSelection, eraseSelection, selWeight } from '../../core/doc/pixels'
 import { StrokeCoverage, applyStroke, DEFAULT_BRUSH, type BrushSettings } from '../../core/doc/brush'
-import { blurDab, smudgeDab, pushDab } from '../../core/retouch'
-import { selectionStrokeCoverage } from '../../core/doc/selection'
+import { retouchDab } from '../../core/retouch'
+import { applyTone } from '../../core/tone'
+import { selectionStrokeCoverage, makeSelection } from '../../core/doc/selection'
 import { contentFill } from '../../core/contentfill'
 import { flattenDoc } from '../../core/doc/render'
 import { MAX_SIDE } from '../../core/limits'
@@ -22,18 +23,37 @@ const gray = (c: [number, number, number]): number => Math.round(0.299 * c[0] + 
 export function brushOf(o: Obj, key = 'brush'): BrushSettings {
   if (o[key] === undefined) return DEFAULT_BRUSH
   const b = object(o[key], key)
-  onlyKeys(b, ['size', 'hardness', 'opacity', 'pressureSize', 'pressureOpacity'], key)
-  return {
+  onlyKeys(b, ['size', 'hardness', 'opacity', 'pressureSize', 'pressureOpacity', 'tip', 'seed'], key)
+  const out: BrushSettings = {
     size: num(b, 'size', 1, 5000, DEFAULT_BRUSH.size)!,
     hardness: num(b, 'hardness', 0, 1, DEFAULT_BRUSH.hardness)!,
     opacity: num(b, 'opacity', 0, 1, DEFAULT_BRUSH.opacity)!,
     pressureSize: bool(b, 'pressureSize', DEFAULT_BRUSH.pressureSize)!,
     pressureOpacity: bool(b, 'pressureOpacity', DEFAULT_BRUSH.pressureOpacity)!
   }
+  if (b.tip !== undefined) {
+    const t = object(b.tip, `${key}.tip`)
+    onlyKeys(t, ['shape', 'angle', 'roundness', 'spacing', 'scatter', 'sizeJitter', 'opacityJitter'], `${key}.tip`)
+    out.tip = {
+      shape: oneOf(t, 'shape', ['round', 'square'] as const, 'round')!,
+      angle: num(t, 'angle', -360, 360, 0)!,
+      roundness: num(t, 'roundness', 0.05, 1, 1)!,
+      spacing: num(t, 'spacing', 0.01, 2, undefined),
+      scatter: num(t, 'scatter', 0, 2, 0)!,
+      sizeJitter: num(t, 'sizeJitter', 0, 1, 0)!,
+      opacityJitter: num(t, 'opacityJitter', 0, 1, 0)!
+    }
+  }
+  return out
+}
+/** 흩뿌리기·지터의 난수 seed (같은 seed = 같은 획) */
+export function brushSeed(o: Obj, key = 'brush'): number {
+  const b = o[key]
+  return b && typeof b === 'object' && typeof (b as Obj).seed === 'number' ? int(b as Obj, 'seed', 0, 0xffffffff) : 7
 }
 
 /** 붓질 세션: 레이어를 문서 크기로 굽고 사본을 만든다 (편집기 `tools/paint.ts begin` 과 같은 규칙) */
-function session(doc: Doc, layerId: string, target: 'layer' | 'mask', brush: BrushSettings, what: string) {
+function session(doc: Doc, layerId: string, target: 'layer' | 'mask', brush: BrushSettings, what: string, seed = 7) {
   const l = target === 'mask' ? maskLayer(doc, layerId) : pixelLayer(doc, layerId, what)
   const base = bakeLayer(doc, l.id, { x: 0, y: 0, w: doc.width, h: doc.height })
   const bl = getLayer(base, l.id)!
@@ -46,13 +66,14 @@ function session(doc: Doc, layerId: string, target: 'layer' | 'mask', brush: Bru
     if (target === 'layer' && bl.lock?.alpha) for (let i = 3; i < live.data.length; i += 4) live.data[i] = bmp.data[i]
     return updateLayer(base, l.id, target === 'mask' ? { mask: { ...bl.mask!, bitmap: live } } : { bitmap: live, shape: undefined })
   }
-  return { l, base, bl, orig: bmp, live, ox, oy, limit, stroke: new StrokeCoverage(bmp.width, bmp.height, brush), finish }
+  return { l, base, bl, orig: bmp, live, ox, oy, limit, stroke: new StrokeCoverage(bmp.width, bmp.height, brush, seed), finish }
 }
 
-const strokeArgs = (o: Obj, withPressure: boolean): { layerId: string; pts: Pt[]; brush: BrushSettings } => ({
+const strokeArgs = (o: Obj, withPressure: boolean): { layerId: string; pts: Pt[]; brush: BrushSettings; seed: number } => ({
   layerId: id(o, 'layerId'),
   pts: points(o, 'points', 1, 5000, withPressure),
-  brush: brushOf(o)
+  brush: brushOf(o),
+  seed: brushSeed(o)
 })
 
 // ── pixels.fill / pixels.erase ──
@@ -169,9 +190,10 @@ export interface BrushStrokeInput {
   layerId: string
   pts: Pt[]
   brush: BrushSettings
+  seed: number
   mode: 'paint' | 'erase'
   color: [number, number, number]
-  target: 'layer' | 'mask'
+  target: 'layer' | 'mask' | 'selection'
 }
 export const brushStrokeCommand: DocCommand<BrushStrokeInput> = {
   name: 'brush.stroke',
@@ -183,11 +205,30 @@ export const brushStrokeCommand: DocCommand<BrushStrokeInput> = {
       ...strokeArgs(o, true),
       mode: oneOf(o, 'mode', ['paint', 'erase'] as const, 'paint')!,
       color: colorOf(o, 'color', '#000000'),
-      target: oneOf(o, 'target', ['layer', 'mask'] as const, 'layer')!
+      target: oneOf(o, 'target', ['layer', 'mask', 'selection'] as const, 'layer')!
     }
   },
   run(doc, i) {
-    const s = session(doc, i.layerId, i.target, i.brush, '칠하기')
+    if (i.target === 'selection') {
+      // 퀵 마스크와 같은 규칙: 흰색 = 선택, 지우개 = 선택 해제 (layerId 는 무시)
+      const W = doc.width
+      const H = doc.height
+      const orig = new Uint8ClampedArray(W * H * 4)
+      const m = doc.selection?.mask
+      for (let k = 0; k < W * H; k++) {
+        const v = m ? m[k] : 255
+        orig[k * 4] = orig[k * 4 + 1] = orig[k * 4 + 2] = v
+        orig[k * 4 + 3] = 255
+      }
+      const stroke = new StrokeCoverage(W, H, i.brush, i.seed)
+      for (const p of i.pts) stroke.lineTo(p.x, p.y, p.pressure ?? 1)
+      const v = i.mode === 'erase' ? 0 : 255
+      const out = applyStroke({ width: W, height: H, data: orig }, stroke, [v, v, v], 'paint')
+      const mask = new Uint8Array(W * H)
+      for (let k = 0; k < mask.length; k++) mask[k] = out.data[k * 4]
+      return { doc: { ...doc, selection: makeSelection(W, H, mask) }, label: '퀵 마스크', summary: `선택 영역을 붓으로 ${i.mode === 'erase' ? '뺌' : '더함'}`, warnings: [] }
+    }
+    const s = session(doc, i.layerId, i.target, i.brush, '칠하기', i.seed)
     for (const p of i.pts) s.stroke.lineTo(p.x - s.ox, p.y - s.oy, p.pressure ?? 1)
     const r = s.stroke.takeDirty()
     if (r) {
@@ -272,6 +313,7 @@ export interface RetouchInput {
   layerId: string
   pts: Pt[]
   brush: BrushSettings
+  seed: number
   mode: 'blur' | 'smudge' | 'liquify'
   strength: number
   target: 'layer' | 'mask'
@@ -303,9 +345,7 @@ export const retouchCommand: DocCommand<RetouchInput> = {
       let a = prev
       for (let k = 1; k <= n; k++) {
         const b = { x: prev.x + ((cur.x - prev.x) * k) / n, y: prev.y + ((cur.y - prev.y) * k) / n }
-        if (i.mode === 'blur') blurDab(rs, b.x, b.y)
-        else if (i.mode === 'smudge') smudgeDab(rs, a, b)
-        else pushDab(rs, a, b)
+        retouchDab(rs, i.mode, a, b)
         a = b
       }
       prev = cur
@@ -315,11 +355,49 @@ export const retouchCommand: DocCommand<RetouchInput> = {
   }
 }
 
+// ── tone.stroke (닷지·번·스펀지) ──
+export interface ToneInput {
+  layerId: string
+  pts: Pt[]
+  brush: BrushSettings
+  seed: number
+  mode: 'dodge' | 'burn' | 'sponge'
+  range: 'shadows' | 'midtones' | 'highlights'
+  exposure: number
+  saturate: boolean
+  target: 'layer' | 'mask'
+}
+export const toneCommand: DocCommand<ToneInput> = {
+  name: 'tone.stroke',
+  heavy: true,
+  parse(raw) {
+    const o = object(raw)
+    onlyKeys(o, ['layerId', 'points', 'brush', 'mode', 'range', 'exposure', 'saturate', 'target'])
+    return {
+      ...strokeArgs(o, true),
+      mode: oneOf(o, 'mode', ['dodge', 'burn', 'sponge'] as const),
+      range: oneOf(o, 'range', ['shadows', 'midtones', 'highlights'] as const, 'midtones')!,
+      exposure: num(o, 'exposure', 1, 100, 50)!,
+      saturate: bool(o, 'saturate', false)!,
+      target: oneOf(o, 'target', ['layer', 'mask'] as const, 'layer')!
+    }
+  },
+  run(doc, i) {
+    const s = session(doc, i.layerId, i.target, { ...i.brush, opacity: 1 }, '닷지·번')
+    for (const p of i.pts) s.stroke.lineTo(p.x - s.ox, p.y - s.oy, p.pressure ?? 1)
+    const r = s.stroke.takeDirty()
+    if (r) applyTone(s.orig.data, s.live.data, s.live.width, s.stroke.cov, r, { mode: i.mode, range: i.range, exposure: i.exposure / 100, saturate: i.saturate }, s.limit)
+    const label = { dodge: '닷지', burn: '번', sponge: '스펀지' }[i.mode]
+    return { doc: s.finish(), label, summary: `"${s.l.name}" ${label} 점 ${i.pts.length}개`, warnings: [] }
+  }
+}
+
 // ── clone.stroke ──
 export interface CloneInput {
   layerId: string
   pts: Pt[]
   brush: BrushSettings
+  seed: number
   source: Pt
   sampleAll: boolean
 }
@@ -374,6 +452,7 @@ export interface HealInput {
   layerId: string
   pts: Pt[]
   brush: BrushSettings
+  seed: number
 }
 export const healCommand: DocCommand<HealInput> = {
   name: 'heal.stroke',

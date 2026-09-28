@@ -15,7 +15,7 @@ import ViewStreamRounded from '@mui/icons-material/ViewStreamRounded'
 import * as A from '../editor/actions'
 import { editor, useEditor, useDoc } from '../editor/store'
 import { toolInfo } from '../tools'
-import { CROP_RATIO_LIST, hasCrop } from '../tools/misc'
+import { CROP_RATIO_LIST, hasCrop, typeTool } from '../tools/misc'
 import { hasPendingDistort } from '../tools/move'
 import { runCommand } from '../editor/commands'
 import { positionLocked } from '../editor/pixels'
@@ -137,7 +137,17 @@ function Seg<T extends string>({ value, options, onChange }: { value: T; options
   )
 }
 
-function BrushControls({ opacityLabel = '불투명도', strength = false, presets = false }: { opacityLabel?: string; strength?: boolean; presets?: boolean }): JSX.Element {
+function BrushControls({
+  opacityLabel = '불투명도',
+  strength = false,
+  presets = false,
+  hideOpacity = false
+}: {
+  opacityLabel?: string
+  strength?: boolean
+  presets?: boolean
+  hideOpacity?: boolean
+}): JSX.Element {
   const s = useEditor((st) => st.settings)
   const b = s.brush
   return (
@@ -171,7 +181,7 @@ function BrushControls({ opacityLabel = '불투명도', strength = false, preset
         format={(v) => `${v}%`}
         onChange={(v) => editor.setSettings({ brush: { ...b, hardness: v / 100 } })}
       />
-      {strength ? (
+      {hideOpacity ? null : strength ? (
         <SliderControl label="강도" tooltip="1~0 키" value={s.blurStrength} min={1} max={100} format={(v) => `${v}%`} onChange={(v) => editor.setSettings({ blurStrength: v })} />
       ) : (
         <SliderControl
@@ -187,6 +197,11 @@ function BrushControls({ opacityLabel = '불투명도', strength = false, preset
       {presets && (
         <>
           <GDivider />
+          <Tooltip title="팁 모양·각도·간격·흩뿌리기·질감 (B 도구)">
+            <Button variant="outlined" size="small" onClick={() => editor.set({ dialog: { kind: 'brush' } })} sx={{ whiteSpace: 'nowrap', px: '8px' }}>
+              브러시 설정…
+            </Button>
+          </Tooltip>
           <Tooltip title="펜 태블릿으로 칠할 때 누르는 힘에 따라 굵기가 바뀝니다.">
             <span>
               <Check label="필압 굵기" checked={b.pressureSize !== false} onChange={(v) => editor.setSettings({ brush: { ...b, pressureSize: v } })} />
@@ -242,6 +257,35 @@ function ObjectSelectHeader(): JSX.Element {
       {sess && s.objectMode !== 'paint' && <Hint>Shift+클릭: 여기도 포함 · Alt+클릭: 여기는 빼기</Hint>}
       {s.objectMode === 'paint' && <Hint>개체 위를 문지르면 잡히고, 더 문지르면 넓어집니다. Alt+문지르기는 빼기입니다.</Hint>}
       <SelectionOps />
+    </>
+  )
+}
+
+/** 펜 도구 — 활성 패스로 할 일 (패스 패널과 같은 동작) */
+function PenHeader(): JSX.Element {
+  const doc = useDoc()
+  const activeId = useEditor((st) => st.activePathId)
+  useEditor((st) => st.renderTick)
+  const path = doc?.paths?.find((p) => p.id === activeId) ?? null
+  return (
+    <>
+      <Button variant="outlined" size="small" disabled={!path} onClick={() => path && A.pathToSelection(path.id, 'replace')}>
+        선택으로
+      </Button>
+      <Button variant="outlined" size="small" disabled={!path} onClick={() => path && A.fillPath(path.id)}>
+        채우기
+      </Button>
+      <Button variant="outlined" size="small" disabled={!path} onClick={() => path && A.strokePath(path.id)}>
+        붓으로 선
+      </Button>
+      <Button variant="outlined" size="small" disabled={!path} onClick={() => path && A.setVectorMask(path.id)}>
+        벡터 마스크
+      </Button>
+      <Button variant="outlined" size="small" disabled={!path} onClick={() => editor.set({ activePathId: null })}>
+        새 패스
+      </Button>
+      <GDivider />
+      <Hint>{path ? `"${path.name}" 을 그리는 중입니다. 첫 앵커를 누르면 닫히고, Enter 는 열린 채 끝냅니다.` : '클릭은 꼭짓점, 끌면 곡선입니다. 그린 패스는 오른쪽 아래 패스 탭에 모입니다.'}</Hint>
     </>
   )
 }
@@ -315,6 +359,9 @@ function TypeHeader(): JSX.Element {
   const l = doc ? getLayer(doc, doc.activeId) : null
   const tl = l?.kind === 'text' && l.text ? l : null
   const apply = (patch: Partial<typeof s>, textPatch: Record<string, unknown>): void => {
+    // 글을 편집하는 중에 구간을 선택했으면 그 구간에만 (굵게·기울임·색·크기·글꼴)
+    const runKeys = ['bold', 'italic', 'color', 'size', 'font']
+    if (Object.keys(textPatch).every((k) => runKeys.includes(k)) && typeTool.onRunPatch?.(textPatch)) return
     editor.setSettings(patch)
     if (doc && tl?.text) {
       const data = { ...tl.text, ...textPatch }
@@ -359,6 +406,19 @@ function TypeHeader(): JSX.Element {
         on={cur?.vertical ?? s.typeVertical}
         onClick={() => apply({ typeVertical: !(cur?.vertical ?? s.typeVertical) }, { vertical: !(cur?.vertical ?? s.typeVertical) })}
       />
+      {cur?.runs && (
+        <ToggleChip
+          label="부분 서식 지우기"
+          tooltip="글자별로 넣은 서식을 모두 지웁니다"
+          on={false}
+          onClick={() => {
+            if (!doc || !tl?.text) return
+            const data = { ...tl.text, runs: undefined }
+            const bmp = renderText(data)
+            editor.commit(updateLayer(doc, tl.id, { text: data, bitmap: bmp, transform: { ...tl.transform, width: bmp.width, height: bmp.height } }), '부분 서식 지우기')
+          }}
+        />
+      )}
       {cur && (
         <>
           <Group label="색">
@@ -528,6 +588,55 @@ export default function ToolHeader(): JSX.Element {
           <BrushControls strength />
         </>
       )
+      break
+    case 'dodge':
+      body = (
+        <>
+          <Seg
+            value={s.toneMode}
+            options={[
+              { key: 'dodge', label: '닷지 (밝게)' },
+              { key: 'burn', label: '번 (어둡게)' },
+              { key: 'sponge', label: '스펀지 (채도)' }
+            ]}
+            onChange={(toneMode) => editor.setSettings({ toneMode })}
+          />
+          <GDivider />
+          {s.toneMode === 'sponge' ? (
+            <Seg
+              value={s.toneSaturate ? 'sat' : 'desat'}
+              options={[
+                { key: 'desat', label: '채도 낮추기' },
+                { key: 'sat', label: '채도 높이기' }
+              ]}
+              onChange={(v) => editor.setSettings({ toneSaturate: v === 'sat' })}
+            />
+          ) : (
+            <Seg
+              value={s.toneRange}
+              options={[
+                { key: 'shadows', label: '어두운 곳' },
+                { key: 'midtones', label: '중간' },
+                { key: 'highlights', label: '밝은 곳' }
+              ]}
+              onChange={(toneRange) => editor.setSettings({ toneRange })}
+            />
+          )}
+          <SliderControl
+            label={s.toneMode === 'sponge' ? '유량' : '노출'}
+            tooltip="1~0 키"
+            value={s.toneExposure}
+            min={1}
+            max={100}
+            format={(v) => `${v}%`}
+            onChange={(toneExposure) => editor.setSettings({ toneExposure })}
+          />
+          <BrushControls opacityLabel="불투명도" hideOpacity />
+        </>
+      )
+      break
+    case 'pen':
+      body = <PenHeader />
       break
     case 'gradient':
       body = (

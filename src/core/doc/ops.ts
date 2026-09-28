@@ -2,7 +2,8 @@
  * 문서 조작 (순수 TS) — 전부 새 Doc 을 돌려준다(불변). Compositor `EditorSession` 의 레이어·캔버스 명령들.
  * 레이어 배열은 아래 → 위이고, 같은 부모끼리의 상대 순서만 의미가 있다(폴더 = parentId).
  */
-import { newId, type Bitmap, type Doc, type Layer, type LayerKind, type AdjustmentKind, type BlendMode, type LayerTransform, type LayerMask, type Guides } from './types'
+import { newId, MORE_ADJUSTMENT_KINDS, type Bitmap, type Doc, type Layer, type LayerKind, type AdjustmentKind, type BlendMode, type LayerTransform, type LayerMask, type Guides } from './types'
+import { DEFAULT_MORE, type MoreAdjustKind } from '../adjust2'
 import { createBitmap, cropBitmap, opaqueBounds, grayBitmap } from './bitmap'
 import { identityTransform, transformBounds } from './transform'
 import { flattenLayers, flattenDoc } from './render'
@@ -109,8 +110,9 @@ export function addBlankLayer(doc: Doc, name?: string): Doc {
 }
 
 export function addAdjustmentLayer(doc: Doc, kind: AdjustmentKind, label: string): Doc {
+  const more = MORE_ADJUSTMENT_KINDS.includes(kind) ? { ...DEFAULT_MORE, kind: kind as MoreAdjustKind } : undefined
   const layer = makeLayer('adjustment', label, null, identityTransform(doc.width, doc.height), {
-    adjustment: { kind, settings: kind === 'invert' ? { ...DEFAULT_ADJUST, invert: true } : DEFAULT_ADJUST }
+    adjustment: { kind, settings: kind === 'invert' ? { ...DEFAULT_ADJUST, invert: true } : DEFAULT_ADJUST, ...(more ? { more } : {}) }
   })
   return insertLayer(doc, layer)
 }

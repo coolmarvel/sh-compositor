@@ -1,7 +1,7 @@
 ---
 title: 픽셀 편집 규약 (bake-before-edit)
 created: 2026-09-21
-updated: 2026-09-22
+updated: 2026-09-23
 domain: editing
 ---
 
@@ -45,3 +45,15 @@ Compositor 는 변형된 레이어에도 역변환으로 칠한다 — 우리는
 투명 픽셀 잠금은 기존 `upload()`가 원본 알파를 복원한다. GPU 부분 업로드·한 획 한 이력 규약은 동일하다.
 WASM 로드/실행 실패 시 `core/retouch.ts`의 영역 복사 CPU 기준 구현을 사용한다.
 Rust 소스·재생성·정확도 계약은 `docs/adr/0003-retouch-wasm.md` 참조.
+
+## v1.2.0 추가 — 닷지·번·스펀지, 퀵 마스크, 브러시 팁, 선택 범위 보정
+
+- **닷지·번·스펀지 (O)**: `core/tone.ts applyTone` 이 획 덮임(`StrokeCoverage`)을 원본에 한 번에 적용한다 (획 안에서 겹쳐도 누적되지 않음). 범위 가중 `rangeWeight`(어두운 곳·중간·밝은 곳), 노출 1~100.
+  `tools/paint.ts` Kind `'tone'`, MCP `tone.stroke`. Rust 커널은 벤치에서 TS 보다 느려 넣지 않았다 (ADR-0006).
+- **퀵 마스크 (Q)**: `store.quickMask` 가 켜지면 `shownDoc` 이 선택 밖을 빨갛게 덮는 임시 레이어(`withQuickMask`, `QUICK_MASK_LAYER_ID`)를 얹어 그린다.
+  브러시(더하기)·지우개(빼기)는 `target: 'selection'` 세션으로 선택 마스크를 직접 칠하고(`beginQuickMask`), Q 로 나갈 때 이력 한 단계("퀵 마스크")로 커밋한다. MCP 는 `brush.stroke` 의 `target: 'selection'`.
+- **색상 범위**: `selection.set shape: 'colorRange'`(기준 색·허용치·반전·모든 레이어). 대화상자는 미리보기 후 `actions.selectColorRange`.
+- **브러시 팁·질감**: `BrushSettings.tip{shape,angle,roundness,spacing,scatter,sizeJitter,opacityJitter,image?}`·`texture` — `StrokeCoverage(width,height,settings,seed)` 가 결정적 난수(`mulberry32`)로 흩뿌리기·지터를 만든다. 같은 seed = 같은 획 (MCP `brush.seed`).
+  팁 이미지·질감은 base64 PNG 로 설정에 저장한다 (`BrushDialog`). 프리셋 3개 추가.
+- **스팟 복구 근접 일치**도 `mulberry32(자리 기반 seed)` 로 결정적이다 (`Math.random` 제거).
+- **선택 범위만 보정**: `adjustLayer` 는 선택 경계가 문서의 60% 미만이면 경계(+필터 여백)만 잘라 계산하고 되돌려 붙인다. 큰 사진의 작은 부분 보정·필터가 전체를 훑지 않는다.

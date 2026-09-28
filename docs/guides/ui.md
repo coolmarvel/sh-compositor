@@ -1,7 +1,7 @@
 ---
 title: 화면·도구·단축키
 created: 2026-09-21
-updated: 2026-09-21
+updated: 2026-09-23
 domain: ui
 ---
 
@@ -12,7 +12,7 @@ domain: ui
 ## 도구 (`src/renderer/src/tools/index.ts` — 순서·라벨·단축키·상태 줄 안내의 SSOT)
 
 이동·변형 V · 사각/타원 선택 M · 올가미(자유/다각형) L · 마법봉 W · 자르기 C · 브러시 B / 지우개 E · 스팟 복구 J · 복제 도장 S ·
-흐림/문지르기/리퀴파이 R · 그라데이션 G · 도형 U · 문자 T · 스포이트 I · 손 H · 돋보기 Z. Space = 어느 도구에서나 손.
+흐림/문지르기/리퀴파이 R · 닷지/번/스펀지 O · 펜(패스) P · 그라데이션 G · 도형 U · 문자 T · 스포이트 I · 손 H · 돋보기 Z. Space = 어느 도구에서나 손.
 도구별 옵션은 `components/ToolHeader.tsx` (이동 도구 = X·Y·폭·높이·배율·각도 수치 입력).
 
 ## 전역 단축키 (`App.tsx` `onKey` — 입력칸·대화상자·메뉴가 열려 있으면 무시)
@@ -22,8 +22,8 @@ domain: ui
 | 파일 | Ctrl+N 새로 · Ctrl+O 열기 · Ctrl+Shift+O 레이어로 가져오기 · Ctrl+S / Ctrl+Shift+S 저장 · Ctrl+Shift+Alt+S PNG · Ctrl+W 닫기 |
 | 편집 | Ctrl+Z / Ctrl+Shift+Z·Ctrl+Y · Ctrl+X/C/V · Ctrl+Shift+C 병합 복사 · Delete 지우기 · Alt+Backspace / Ctrl+Backspace 전경/배경 채우기 · Shift+F5 내용 인식 · Ctrl+T 변형 |
 | 이미지 | Ctrl+Alt+I 이미지 크기 · Ctrl+Alt+C 캔버스 크기 · Ctrl+L 레벨 · Ctrl+M 커브 · Ctrl+U 색조/채도 · Ctrl+I 반전 · Ctrl+Shift+U 채도 감소 · Ctrl+Shift+L 자동 톤 · Ctrl+Shift+Alt+L 자동 대비 · Ctrl+Shift+B 자동 색상 |
-| 레이어 | Ctrl+Shift+N 새 · Ctrl+J 복사한/복제 · Ctrl+Shift+J 잘라낸 · Ctrl+G / Ctrl+Shift+G 그룹 · Ctrl+Alt+G 클리핑 · Ctrl+E 병합 · Ctrl+Shift+E 보이는 병합 · Ctrl+] / [ 순서 · Q 마스크 |
-| 선택 | Ctrl+A · Ctrl+D · Ctrl+Shift+I 반전 · Shift+F6 페더 |
+| 레이어 | Ctrl+Shift+N 새 · Ctrl+J 복사한/복제 · Ctrl+Shift+J 잘라낸 · Ctrl+G / Ctrl+Shift+G 그룹 · Ctrl+Alt+G 클리핑 · Ctrl+E 병합 · Ctrl+Shift+E 보이는 병합 · Ctrl+] / [ 순서 (마스크 추가는 메뉴·패널 버튼) |
+| 선택 | Ctrl+A · Ctrl+D · Ctrl+Shift+I 반전 · Shift+F6 페더 · Q 퀵 마스크 (v1.2.0, 브러시 = 더하기·지우개 = 빼기) |
 | 보기 | Ctrl++ / Ctrl+- · Ctrl+0 맞춤 · Ctrl+1 100% · Ctrl+' 픽셀 격자 |
 | 색 | X 바꾸기 · D 기본 흑백 |
 
@@ -66,7 +66,7 @@ domain: ui
 
 ## 사용 설명서 (F1, `components/dialogs/HelpDialog.tsx`)
 
-탭 7개, 한 줄에 한 문장. 단축키를 바꾸면 여기 `PAGES` 도 고친다(도구 탭은 `tools/index.ts` 에서 자동). 키 칸 문법: `+` 로 조합, ` / ` 는 "또는", 키가 아닌 말은 굵은 글자.
+탭 8개(MCP 포함), 한 줄에 한 문장. 단축키를 바꾸면 여기 `PAGES` 도 고친다(도구 탭은 `tools/index.ts` 에서 자동). 키 칸 문법: `+` 로 조합, ` / ` 는 "또는", 키가 아닌 말은 굵은 글자.
 
 ## P3 대화상자·패널
 

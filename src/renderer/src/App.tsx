@@ -17,6 +17,7 @@ import PanelTabs from './components/panels/PanelTabs'
 import SwatchesPanel from './components/panels/SwatchesPanel'
 import NavigatorPanel from './components/panels/NavigatorPanel'
 import HistogramPanel from './components/panels/HistogramPanel'
+import PathsPanel from './components/panels/PathsPanel'
 import { editor, useEditor, useDoc, type Tool } from './editor/store'
 import * as A from './editor/actions'
 import { openDialog, openPaths, openCompFolder, recentFiles, clearRecent, saveProject, exportPng, exportLayers, exportSelection, copyToClipboard, pasteFromClipboard } from './editor/io'
@@ -54,7 +55,9 @@ const TOOL_KEYS: Record<string, Tool> = {
   j: 'spotHealing',
   s: 'cloneStamp',
   r: 'blur',
+  o: 'dodge',
   g: 'gradient',
+  p: 'pen',
   u: 'shape',
   t: 'type',
   i: 'eyedropper',
@@ -156,6 +159,7 @@ export default function App(): JSX.Element {
   const settings = useEditor((s) => s.settings)
   const layersWidth = useEditor((s) => s.layersWidth)
   const maskEditing = useEditor((s) => s.maskEditing)
+  const quickMask = useEditor((s) => s.quickMask)
   const selectedCount = useEditor((s) => s.selectedIds.length)
   const [skin, setSkin] = useState<SkinName>(loadSkin)
   useEditor((s) => s.renderTick) // 최근 파일 목록 갱신 신호
@@ -263,7 +267,7 @@ export default function App(): JSX.Element {
       if (e.shiftKey) return
       if (k === 'x') return run(() => editor.set({ fg: editor.state.bg, bg: editor.state.fg }))
       if (k === 'd') return run(() => editor.set({ fg: [0, 0, 0], bg: [255, 255, 255] }))
-      if (k === 'q' && editor.doc) return run(() => A.addMask())
+      if (k === 'q' && editor.doc) return run(() => editor.toggleQuickMask())
       const t = TOOL_KEYS[k]
       if (t) {
         run(() => {
@@ -422,13 +426,15 @@ export default function App(): JSX.Element {
           onClick: () => {},
           disabled: !active,
           submenu: [
-            { label: active?.mask ? '마스크 편집' : '마스크 추가 (모두 보이기)', shortcut: 'Q', onClick: () => A.addMask() },
+            { label: active?.mask ? '마스크 편집' : '마스크 추가 (모두 보이기)', onClick: () => A.addMask() },
             { label: '마스크 추가 (모두 가리기)', onClick: () => A.addMask(true), disabled: !!active?.mask },
             'sep',
             { label: '마스크 편집 중', onClick: () => editor.set({ maskEditing: !maskEditing }), checked: maskEditing, disabled: !active?.mask },
             { label: active?.mask?.enabled === false ? '마스크 켜기' : '마스크 끄기', onClick: A.toggleMaskEnabled, disabled: !active?.mask },
             { label: '마스크 반전', onClick: A.invertMask, disabled: !active?.mask },
             { label: '마스크 페더…', onClick: dlg({ kind: 'selectAmount', op: 'maskFeather' }), disabled: !active?.mask },
+            'sep',
+            { label: '벡터 마스크 떼기', onClick: A.removeVectorMask, disabled: !active?.vectorMask },
             'sep',
             { label: '마스크 적용', onClick: () => A.deleteMask(true), disabled: !active?.mask || !active?.bitmap },
             { label: '마스크 삭제', onClick: () => A.deleteMask(false), disabled: !active?.mask }
@@ -455,6 +461,9 @@ export default function App(): JSX.Element {
         { label: '선택 반전', shortcut: 'Ctrl+Shift+I', onClick: A.invertSelection, disabled: !has },
         { label: '레이어 픽셀 선택', onClick: () => active && A.selectLayerPixels(active.id), disabled: !active?.bitmap },
         { label: '피사체 (AI)', onClick: () => void A.selectSubject(), disabled: !has },
+        { label: '색상 범위…', onClick: dlg({ kind: 'colorRange' }), disabled: !has },
+        'sep',
+        { label: '퀵 마스크 모드', shortcut: 'Q', onClick: () => editor.toggleQuickMask(), checked: quickMask, disabled: !has },
         'sep',
         { label: '확장…', onClick: dlg({ kind: 'selectAmount', op: 'expand' }), disabled: !hasSel },
         { label: '축소…', onClick: dlg({ kind: 'selectAmount', op: 'contract' }), disabled: !hasSel },
@@ -520,7 +529,13 @@ export default function App(): JSX.Element {
 
   const info = toolInfo(tool)
   const zoom = tab?.view ? `${Math.round(tab.view.zoom * 1000) / 10}%` : '—'
-  const message = progress?.label ?? (maskEditing ? '마스크 편집 중입니다. 검정으로 칠하면 가려지고 흰색으로 칠하면 보입니다. 레이어로 돌아가려면 레이어 썸네일을 누르세요.' : (info?.hint ?? '준비'))
+  const message =
+    progress?.label ??
+    (quickMask
+      ? '퀵 마스크 모드입니다. 브러시로 칠하면 선택에 더해지고 지우개로 칠하면 빠집니다. 빨간 곳이 선택 밖입니다. Q 로 나갑니다.'
+      : maskEditing
+        ? '마스크 편집 중입니다. 검정으로 칠하면 가려지고 흰색으로 칠하면 보입니다. 레이어로 돌아가려면 레이어 썸네일을 누르세요.'
+        : (info?.hint ?? '준비'))
   const panes: React.ReactNode[] = doc
     ? [
         <CursorPane key="cur" />,
@@ -557,7 +572,8 @@ export default function App(): JSX.Element {
                 { key: 'history', label: '작업 내역', render: () => <HistoryPanel /> },
                 { key: 'swatches', label: '견본', render: () => <SwatchesPanel /> },
                 { key: 'navigator', label: '내비게이터', render: () => <NavigatorPanel /> },
-                { key: 'histogram', label: '히스토그램', render: () => <HistogramPanel /> }
+                { key: 'histogram', label: '히스토그램', render: () => <HistogramPanel /> },
+                { key: 'paths', label: '패스', render: () => <PathsPanel /> }
               ]}
             />
           </Box>

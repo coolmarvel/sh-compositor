@@ -5,7 +5,7 @@ import * as old from './retouch-reference'
 import * as cpu from '../src/core/retouch'
 import { RetouchWasm, type RetouchMode } from '../src/core/retouchWasm'
 async function main() {
-  const wasm = await RetouchWasm.create(readFileSync('src/renderer/src/assets/retouch.wasm'))
+  const wasm = await RetouchWasm.create(readFileSync('src/renderer/src/assets/kernels.wasm'))
   try {
     const width = 4000,
       height = 3000,

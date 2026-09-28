@@ -1,7 +1,7 @@
 ---
 title: 렌더링 — CPU 합성(진실)과 WebGL2 거울
 created: 2026-09-21
-updated: 2026-09-22
+updated: 2026-09-23
 domain: rendering
 ---
 
@@ -20,9 +20,9 @@ domain: rendering
 | 폴더 | 격리 합성 후 폴더의 혼합·불투명도·마스크로 한 번 | FBO 로 격리 |
 | 혼합 16종 | `blend.ts compositePixel` (W3C 수식) | `shaders.ts LAYER_FS blendFn` — 인덱스는 `BLEND_MODES` 순서 |
 | 클리핑 | 바로 아래 기준 레이어의 알파를 덮임에 곱함. 숨긴 기준 위 클리핑 레이어는 안 보임 | `base` 타깃 알파 |
-| 마스크 | R 채널 × 알파, `enabled=false` 면 무시 | 마스크 텍스처 |
-| 조정 레이어 | 아래까지의 합성에 보정 적용(마스크·클리핑 반영). `adjustment.filters` 는 **CPU 만** 적용 | `ADJUST_FS` + `adjustmentTables` LUT |
-| 효과 | `renderEffects` 결과를 레이어 픽셀로 (캐시) | 같은 함수 결과를 텍스처로 캐시 |
+| 마스크 | R 채널 × 알파, `enabled=false` 면 무시. **벡터 마스크**가 있으면 `core/doc/path.ts effectiveMask` 가 픽셀 마스크 × 벡터 마스크를 레이어 좌표 비트맵으로 만들어 넘긴다 (캐시) | 같은 `effectiveMask` 결과를 마스크 텍스처로 (`drawable().mask`) |
+| 조정 레이어 | 아래까지의 합성에 보정 적용(마스크·클리핑 반영). `adjustment.filters` 는 **CPU 만** 적용. v1.2 흑백·색상 균형·활기·포스터화·한계값은 `adjustment.more` → `core/adjust2.ts applyMoreAdjust` | `ADJUST_FS` + `adjustmentTables` LUT, `more` 는 `uMore*` 유니폼으로 GLSL 이식 (E2E O6 GPU=CPU) |
+| 효과 | `renderEffects` 결과를 레이어 픽셀로 (캐시). v1.2 그라데이션 덮기 `gradientOver`·경사와 엠보스 `bevelOver` 추가 (`core/effects.ts`) | 같은 함수 결과를 텍스처로 캐시 |
 
 - `setDoc(doc)` 은 문서 객체가 같으면 재합성하지 않는다(개미 행진·오버레이만 다시 그림). 칠하는 중엔 `uploadRect` 가 dirty 를 켠다.
 - 텍스처는 `UNPACK_PREMULTIPLY_ALPHA_WEBGL` 로 올리고 셰이더는 프리멀티플라이드로 계산, 결과는 체커 위에 `PRESENT_FS`.

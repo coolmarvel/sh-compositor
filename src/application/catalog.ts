@@ -3,7 +3,7 @@
  * 편집기 사용 설명서(F1 ▸ MCP 탭)도 같은 목록을 보여 준다. 매개변수 스키마(zod)는 server/mcp.ts 에 있다 (렌더러에 zod 를 싣지 않게).
  * 단위 테스트가 이 목록과 실제 등록 도구·명령 등록부를 대조한다.
  */
-export type ToolGroup = 'document' | 'image' | 'layer' | 'selection' | 'pixels' | 'adjust' | 'job'
+export type ToolGroup = 'document' | 'image' | 'layer' | 'selection' | 'path' | 'pixels' | 'adjust' | 'job'
 
 export interface ToolDoc {
   name: string
@@ -24,6 +24,7 @@ export const TOOL_GROUPS: { key: ToolGroup; label: string }[] = [
   { key: 'image', label: '이미지·캔버스' },
   { key: 'layer', label: '레이어·마스크' },
   { key: 'selection', label: '선택' },
+  { key: 'path', label: '패스·벡터 마스크' },
   { key: 'pixels', label: '칠하기·고치기' },
   { key: 'adjust', label: '색 보정·필터' },
   { key: 'job', label: '작업' }
@@ -46,7 +47,7 @@ export const TOOL_CATALOG: ToolDoc[] = [
     name: 'compositor_asset_upload_base64',
     title: '작은 파일 올리기',
     group: 'document',
-    lines: ['HTTP 업로드를 쓸 수 없는 클라이언트용 base64 업로드입니다.', 'PNG·PSD·.shcomp 를 받고 assetId 를 돌려줍니다.'],
+    lines: ['HTTP 업로드를 쓸 수 없는 클라이언트용 base64 업로드입니다.', 'PNG·JPEG·PSD·.shcomp 를 받고 assetId 를 돌려줍니다.'],
     params: 'dataBase64, name?',
     mutates: false
   },
@@ -54,7 +55,7 @@ export const TOOL_CATALOG: ToolDoc[] = [
     name: 'compositor_document_import',
     title: '파일로 문서 만들기',
     group: 'document',
-    lines: ['올린 PNG·PSD·.shcomp(assetId)로 문서를 만듭니다.', 'PSD 에서 옮기지 못한 항목은 warnings 로 알립니다.'],
+    lines: ['올린 PNG·JPEG·PSD·.shcomp(assetId)로 문서를 만듭니다.', 'PSD 에서 옮기지 못한 항목은 warnings 로 알립니다.'],
     params: 'assetId, name?',
     mutates: false
   },
@@ -84,8 +85,8 @@ export const TOOL_CATALOG: ToolDoc[] = [
     name: 'compositor_export',
     title: '내보내기',
     group: 'document',
-    lines: ['지정 revision(생략 = 현재)을 PNG(합성)·.shcomp·PSD 로 만듭니다.', '결과는 resource_link 와 downloadUrl 로 받습니다.'],
-    params: 'docId, format(png·shcomp·psd), revision?, operationId?, waitMs?',
+    lines: ['지정 revision(생략 = 현재)을 PNG(합성)·JPEG(합성, 흰 배경)·.shcomp·PSD 로 만듭니다.', '결과는 resource_link 와 downloadUrl 로 받습니다.'],
+    params: 'docId, format(png·jpeg·shcomp·psd), revision?, operationId?, waitMs?',
     mutates: false
   },
   { name: 'compositor_histogram', title: '히스토그램', group: 'document', lines: ['합성 결과 또는 레이어 하나의 밝기·RGB 분포를 봅니다.'], params: 'docId, layerId?', mutates: false },
@@ -142,7 +143,7 @@ export const TOOL_CATALOG: ToolDoc[] = [
     name: 'compositor_layer_add',
     title: '레이어 추가',
     group: 'layer',
-    lines: ['빈 픽셀 레이어·폴더·조정 레이어를 추가하거나, 올린 PNG(assetId)를 새 레이어로 넣습니다.'],
+    lines: ['빈 픽셀 레이어·폴더·조정 레이어(12종)를 추가하거나, 올린 PNG(assetId)를 새 레이어로 넣습니다.'],
     params: `${M}, kind(pixel·group·adjustment·image), name?, adjustmentKind?, assetId?, x?, y?, aboveId?`,
     command: 'layer.add',
     mutates: true
@@ -151,8 +152,10 @@ export const TOOL_CATALOG: ToolDoc[] = [
     name: 'compositor_layer_update',
     title: '레이어 속성',
     group: 'layer',
-    lines: ['이름·표시·불투명도·혼합·클리핑·잠금·위치·크기·회전·반전·레이어 효과·조정 설정·도형 모양·마스크 켜기를 준 것만 바꿉니다.'],
-    params: `${M}, layerId, name?, visible?, opacity?, blend?, clip?, x?, y?, width?, height?, rotation?, flipH?, flipV?, lock?, effects?, adjustment?, shape?, maskEnabled?, maskLinked?`,
+    lines: [
+      '이름·표시·불투명도·혼합·클리핑·잠금·위치·크기·회전·반전·레이어 효과(외곽선·그림자·안쪽 그림자·색 덮기·외부 광선·그라데이션 덮기·경사와 엠보스)·조정 설정(adjustment 또는 more)·도형 모양·마스크 켜기를 준 것만 바꿉니다.'
+    ],
+    params: `${M}, layerId, name?, visible?, opacity?, blend?, clip?, x?, y?, width?, height?, rotation?, flipH?, flipV?, lock?, effects?, adjustment?, more?, shape?, maskEnabled?, maskLinked?`,
     command: 'layer.update',
     mutates: true
   },
@@ -227,8 +230,8 @@ export const TOOL_CATALOG: ToolDoc[] = [
     name: 'compositor_selection_set',
     title: '선택 만들기',
     group: 'selection',
-    lines: ['전체·해제·반전·사각형·타원·다각형·마법봉·레이어 픽셀로 선택합니다.', 'mode 로 지금 선택에 더하거나 빼거나 겹칩니다.'],
-    params: `${M}, shape, mode?(replace·add·subtract·intersect), x?, y?, width?, height?, points[]?, tolerance?, contiguous?, sampleAll?, layerId?`,
+    lines: ['전체·해제·반전·사각형·타원·다각형·마법봉·레이어 픽셀·색상 범위(colorRange)로 선택합니다.', 'mode 로 지금 선택에 더하거나 빼거나 겹칩니다.'],
+    params: `${M}, shape, mode?(replace·add·subtract·intersect), x?, y?, width?, height?, points[]?, tolerance?, contiguous?, sampleAll?, layerId?, color?, fuzziness?(1~200), invert?`,
     command: 'selection.set',
     mutates: true
   },
@@ -239,6 +242,61 @@ export const TOOL_CATALOG: ToolDoc[] = [
     lines: ['확장·축소·페더·매끄럽게·이동.'],
     params: `${M}, op, amount? 또는 dx, dy`,
     command: 'selection.modify',
+    mutates: true
+  },
+  // 패스
+  {
+    name: 'compositor_path_set',
+    title: '패스 만들기·고치기',
+    group: 'path',
+    lines: ['베지어 앵커(x, y, in?, out?)로 서브패스들을 만듭니다 (펜 도구).', 'pathId 를 주면 그 패스를 통째로 바꿉니다.'],
+    params: `${M}, pathId?, name?, subpaths[{closed, anchors[{x,y,in?{x,y},out?{x,y}}]}]`,
+    command: 'path.set',
+    mutates: true
+  },
+  {
+    name: 'compositor_path_delete',
+    title: '패스 지우기',
+    group: 'path',
+    lines: ['패스를 지웁니다 (레이어의 벡터 마스크에는 영향 없음).'],
+    params: `${M}, pathId`,
+    command: 'path.delete',
+    mutates: true
+  },
+  {
+    name: 'compositor_path_to_selection',
+    title: '패스를 선택으로',
+    group: 'path',
+    lines: ['패스 안쪽을 선택 영역으로 만듭니다.'],
+    params: `${M}, pathId, mode?`,
+    command: 'path.toSelection',
+    mutates: true
+  },
+  {
+    name: 'compositor_path_fill',
+    title: '패스 채우기',
+    group: 'path',
+    lines: ['패스 안쪽을 한 색으로 채웁니다 (선택 영역이 있으면 그 안만).'],
+    params: `${M}, pathId, layerId, color, opacity?`,
+    command: 'path.fill',
+    mutates: true
+  },
+  {
+    name: 'compositor_path_stroke',
+    title: '패스를 붓으로',
+    group: 'path',
+    lines: ['패스를 따라 지금 붓 설정으로 선을 긋습니다.'],
+    params: `${M}, pathId, layerId, color?, brush?, mode?(paint·erase)`,
+    command: 'path.stroke',
+    mutates: true
+  },
+  {
+    name: 'compositor_layer_vector_mask',
+    title: '벡터 마스크',
+    group: 'path',
+    lines: ['패스를 레이어의 벡터 마스크로 붙입니다 (패스의 복사본, 픽셀 마스크와 곱해짐).', 'pathId 를 null 로 주면 뗍니다.'],
+    params: `${M}, layerId, pathId | null, inverted?, enabled?`,
+    command: 'layer.vectorMask',
     mutates: true
   },
   // 픽셀
@@ -274,8 +332,8 @@ export const TOOL_CATALOG: ToolDoc[] = [
     name: 'compositor_brush_stroke',
     title: '브러시·지우개 획',
     group: 'pixels',
-    lines: ['점 배열 하나가 획 하나입니다 (필압 선택).', '마스크에도 칠할 수 있습니다.'],
-    params: `${M}, layerId, points[{x,y,pressure?}], brush?{size,hardness,opacity}, mode?(paint·erase), color?, target?`,
+    lines: ['점 배열 하나가 획 하나입니다 (필압 선택).', '마스크에도 칠할 수 있고, target=selection 이면 선택 영역을 붓으로 더하거나(paint) 뺍니다(erase, 퀵 마스크).'],
+    params: `${M}, layerId, points[{x,y,pressure?}], brush?{size,hardness,opacity,tip{shape,angle,roundness,spacing,scatter,sizeJitter,opacityJitter},seed}, mode?(paint·erase), color?, target?`,
     command: 'brush.stroke',
     mutates: true
   },
@@ -295,6 +353,15 @@ export const TOOL_CATALOG: ToolDoc[] = [
     lines: ['점 배열을 따라 흐리게 하거나 밀어서 모양을 바꿉니다 (R 도구).'],
     params: `${M}, layerId, points[], mode(blur·smudge·liquify), brush?, strength?, target?`,
     command: 'retouch.stroke',
+    mutates: true
+  },
+  {
+    name: 'compositor_tone_stroke',
+    title: '닷지·번·스펀지',
+    group: 'pixels',
+    lines: ['점 배열을 따라 밝게(dodge)·어둡게(burn) 하거나 채도를 바꿉니다(sponge, O 도구).'],
+    params: `${M}, layerId, points[], mode(dodge·burn·sponge), range?(shadows·midtones·highlights), exposure?(1~100), saturate?, brush?, target?`,
+    command: 'tone.stroke',
     mutates: true
   },
   {
@@ -377,5 +444,5 @@ export const TOOL_CATALOG: ToolDoc[] = [
 export const UNSUPPORTED_ON_SERVER = [
   '문자 레이어 만들기·편집 (서버에 글꼴·캔버스 없음 — PSD 의 문자는 픽셀로 옵니다)',
   'AI 배경 제거·피사체 선택·개체 선택 (브라우저 전용 모델)',
-  'JPEG·WebP·HEIC·TIFF 가져오기와 JPEG·WebP 내보내기 (브라우저 디코더)'
+  'WebP·HEIC·TIFF 가져오기와 WebP 내보내기 (브라우저 디코더. JPEG 은 v1.2 부터 서버에서도 됩니다)'
 ]

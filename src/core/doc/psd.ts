@@ -21,11 +21,13 @@ import {
   type PixelData,
   type AdjustmentLayer
 } from 'ag-psd'
-import type { Doc, Layer, Bitmap, BlendMode, TextData } from './types'
+import type { Doc, Layer, Bitmap, BlendMode, TextData, AdjustmentKind } from './types'
 import { newId } from './types'
 import { identityTransform, isIdentityPlacement } from './transform'
 import { rasterizeBitmap, flattenDoc } from './render'
+import { effectiveMask } from './path'
 import { DEFAULT_ADJUST, DEFAULT_TONE, HUE_BANDS, type Adjustments, type CurvePoint, type ChannelTone, type ColorRange } from '../adjust'
+import { DEFAULT_MORE, DEFAULT_BW, type MoreAdjust, type MoreAdjustKind } from '../adjust2'
 import { DEFAULT_EFFECTS, hasEffects, type LayerEffects } from '../effects'
 import { MAX_SIDE, MAX_PIXELS } from '../limits'
 
@@ -167,7 +169,42 @@ function effectsFrom(e: LayerEffectsInfo | undefined, warn: (m: string) => void)
   if (f) out.overlay = { enabled: f.enabled !== false, color: colorToHex(f.color), opacity: f.opacity ?? 1 }
   const og = e.outerGlow
   if (og) out.outerGlow = { enabled: og.enabled !== false, size: px(og.size, 10), spread: px(og.choke, 0), color: colorToHex(og.color, '#ffffbe'), opacity: og.opacity ?? 0.75 }
-  if (e.innerGlow || e.bevel || e.satin || e.gradientOverlay?.length || e.patternOverlay) warn('안쪽 광선·경사·새틴·그라데이션/패턴 오버레이 효과는 옮기지 못했습니다.')
+  const gv = e.gradientOverlay?.[0]
+  if (gv) {
+    const grad = gv.gradient
+    const stops = grad && grad.type === 'solid' ? grad.colorStops : []
+    const c0 = stops.length ? colorToHex(stops[0].color) : '#000000'
+    const c1 = stops.length ? colorToHex(stops[stops.length - 1].color, '#ffffff') : '#ffffff'
+    out.gradientOverlay = {
+      enabled: gv.enabled !== false,
+      style: gv.type === 'radial' ? 'radial' : 'linear',
+      angle: gv.angle ?? 90,
+      colors: [c0, c1],
+      opacity: gv.opacity ?? 1,
+      scale: gv.scale ?? 100,
+      reverse: !!gv.reverse
+    }
+    if (stops.length > 2 || (grad && grad.type !== 'solid') || (gv.type && gv.type !== 'linear' && gv.type !== 'radial')) warn('그라데이션 덮기는 두 색·선형/원형만 옮겼습니다.')
+  }
+  const bv = e.bevel
+  if (bv) {
+    out.bevel = {
+      enabled: bv.enabled !== false,
+      style: bv.style === 'outer bevel' ? 'outer' : bv.style === 'inner bevel' ? 'inner' : 'emboss',
+      size: px(bv.size, 5),
+      depth: bv.strength ?? 100,
+      soften: px(bv.soften, 0),
+      angle: bv.angle ?? 120,
+      altitude: bv.altitude ?? 30,
+      direction: bv.direction === 'down' ? 'down' : 'up',
+      highlightColor: colorToHex(bv.highlightColor, '#ffffff'),
+      highlightOpacity: bv.highlightOpacity ?? 0.75,
+      shadowColor: colorToHex(bv.shadowColor, '#000000'),
+      shadowOpacity: bv.shadowOpacity ?? 0.75
+    }
+    if (bv.style === 'pillow emboss' || bv.style === 'stroke emboss') warn('베개·선 엠보스는 엠보스로 바꿨습니다.')
+  }
+  if (e.innerGlow || e.satin || e.patternOverlay) warn('안쪽 광선·새틴·패턴 오버레이 효과는 옮기지 못했습니다.')
   return hasEffects(out) ? out : null
 }
 
@@ -185,9 +222,40 @@ const RANGES: [ColorRange, 'reds' | 'yellows' | 'greens' | 'cyans' | 'blues' | '
 ]
 
 /** PSD 조정 → 우리 조정 레이어 (종류·설정). 대응이 없으면 null */
-function adjustmentFrom(a: AdjustmentLayer): { kind: 'levels' | 'curves' | 'hueSaturation' | 'exposure' | 'invert' | 'gradientMap'; settings: Adjustments } | null {
+function adjustmentFrom(a: AdjustmentLayer): { kind: AdjustmentKind; settings: Adjustments; more?: MoreAdjust } | null {
   const base: Adjustments = JSON.parse(JSON.stringify(DEFAULT_ADJUST))
+  const moreOf = (m: Partial<MoreAdjust> & { kind: MoreAdjustKind }): MoreAdjust => ({ ...DEFAULT_MORE, ...m })
   switch (a.type) {
+    case 'black & white':
+      return {
+        kind: 'blackWhite',
+        settings: base,
+        more: moreOf({
+          kind: 'blackWhite',
+          bw: {
+            reds: a.reds ?? DEFAULT_BW.reds,
+            yellows: a.yellows ?? DEFAULT_BW.yellows,
+            greens: a.greens ?? DEFAULT_BW.greens,
+            cyans: a.cyans ?? DEFAULT_BW.cyans,
+            blues: a.blues ?? DEFAULT_BW.blues,
+            magentas: a.magentas ?? DEFAULT_BW.magentas
+          }
+        })
+      }
+    case 'color balance': {
+      const v = (c?: { cyanRed: number; magentaGreen: number; yellowBlue: number }): [number, number, number] => [c?.cyanRed ?? 0, c?.magentaGreen ?? 0, c?.yellowBlue ?? 0]
+      return {
+        kind: 'colorBalance',
+        settings: base,
+        more: moreOf({ kind: 'colorBalance', cb: { shadows: v(a.shadows), midtones: v(a.midtones), highlights: v(a.highlights), preserveLuminosity: a.preserveLuminosity !== false } })
+      }
+    }
+    case 'vibrance':
+      return { kind: 'vibrance', settings: base, more: moreOf({ kind: 'vibrance', vibrance: a.vibrance ?? 0, saturation: a.saturation ?? 0 }) }
+    case 'posterize':
+      return { kind: 'posterize', settings: base, more: moreOf({ kind: 'posterize', levels: a.levels ?? 4 }) }
+    case 'threshold':
+      return { kind: 'threshold', settings: base, more: moreOf({ kind: 'threshold', threshold: a.level ?? 128 }) }
     case 'levels': {
       const rgb = toneFrom(a.rgb)
       const ch = { r: { ...DEFAULT_TONE, ...toneFrom(a.red) }, g: { ...DEFAULT_TONE, ...toneFrom(a.green) }, b: { ...DEFAULT_TONE, ...toneFrom(a.blue) } }
@@ -226,7 +294,19 @@ function adjustmentFrom(a: AdjustmentLayer): { kind: 'levels' | 'curves' | 'hueS
   }
 }
 
-const ADJ_NAMES: Record<string, string> = { levels: '레벨', curves: '커브', 'hue/saturation': '색조/채도', exposure: '노출', invert: '반전', 'gradient map': '그라데이션 맵' }
+const ADJ_NAMES: Record<string, string> = {
+  levels: '레벨',
+  curves: '커브',
+  'hue/saturation': '색조/채도',
+  exposure: '노출',
+  invert: '반전',
+  'gradient map': '그라데이션 맵',
+  'black & white': '흑백',
+  'color balance': '색상 균형',
+  vibrance: '활기',
+  posterize: '포스터화',
+  threshold: '한계값'
+}
 
 function textFrom(l: PsdLayer, bmp: Bitmap | null): TextData | null {
   const t = l.text
@@ -335,7 +415,7 @@ export function psdToDoc(bytes: Uint8Array, name = 'PSD'): PsdResult {
           bitmap: null,
           transform: identityTransform(W, H),
           mask: maskFor(l, 0, 0, W, H),
-          adjustment: { kind: a.kind, settings: a.settings },
+          adjustment: { kind: a.kind, settings: a.settings, ...(a.more ? { more: a.more } : {}) },
           effects: null
         })
         continue
@@ -414,6 +494,22 @@ function adjustmentTo(l: Layer, warn: (m: string) => void): AdjustmentLayer | nu
   if (!a) return null
   const s = a.settings
   if (a.filters) warn(`조정 레이어 "${l.name}" 의 필터는 PSD 에 넣을 수 없어 뺐습니다.`)
+  const m = a.more
+  if (m)
+    switch (m.kind) {
+      case 'blackWhite':
+        return { type: 'black & white', reds: m.bw.reds, yellows: m.bw.yellows, greens: m.bw.greens, cyans: m.bw.cyans, blues: m.bw.blues, magentas: m.bw.magentas }
+      case 'colorBalance': {
+        const v = (c: [number, number, number]): { cyanRed: number; magentaGreen: number; yellowBlue: number } => ({ cyanRed: c[0], magentaGreen: c[1], yellowBlue: c[2] })
+        return { type: 'color balance', shadows: v(m.cb.shadows), midtones: v(m.cb.midtones), highlights: v(m.cb.highlights), preserveLuminosity: m.cb.preserveLuminosity }
+      }
+      case 'vibrance':
+        return { type: 'vibrance', vibrance: m.vibrance, saturation: m.saturation }
+      case 'posterize':
+        return { type: 'posterize', levels: m.levels }
+      case 'threshold':
+        return { type: 'threshold', level: m.threshold }
+    }
   switch (a.kind) {
     case 'levels':
       return { type: 'levels', rgb: toneTo(s), red: toneTo(s.channels.r), green: toneTo(s.channels.g), blue: toneTo(s.channels.b) }
@@ -517,6 +613,59 @@ function effectsTo(e: LayerEffects | null): LayerEffectsInfo | undefined {
         useGlobalLight: false
       }
     ]
+  if (e.gradientOverlay?.enabled) {
+    const g = e.gradientOverlay
+    out.gradientOverlay = [
+      {
+        enabled: true,
+        present: true,
+        showInDialog: true,
+        blendMode: 'normal',
+        opacity: g.opacity,
+        align: true,
+        scale: g.scale,
+        reverse: g.reverse,
+        type: g.style,
+        angle: g.angle,
+        gradient: {
+          name: 'SH Compositor',
+          type: 'solid',
+          smoothness: 1,
+          colorStops: [
+            { color: hexToColor(g.colors[0]), location: 0, midpoint: 0.5 },
+            { color: hexToColor(g.colors[1]), location: 1, midpoint: 0.5 }
+          ],
+          opacityStops: [
+            { opacity: 1, location: 0, midpoint: 0.5 },
+            { opacity: 1, location: 1, midpoint: 0.5 }
+          ]
+        }
+      } as never
+    ]
+  }
+  if (e.bevel?.enabled) {
+    const b = e.bevel
+    out.bevel = {
+      enabled: true,
+      present: true,
+      showInDialog: true,
+      size: units(b.size),
+      angle: b.angle,
+      altitude: b.altitude,
+      strength: b.depth,
+      soften: units(b.soften),
+      style: b.style === 'outer' ? 'outer bevel' : b.style === 'inner' ? 'inner bevel' : 'emboss',
+      direction: b.direction,
+      technique: 'smooth',
+      highlightBlendMode: 'screen',
+      shadowBlendMode: 'multiply',
+      highlightColor: hexToColor(b.highlightColor),
+      highlightOpacity: b.highlightOpacity,
+      shadowColor: hexToColor(b.shadowColor),
+      shadowOpacity: b.shadowOpacity,
+      useGlobalLight: false
+    }
+  }
   if (e.outerGlow?.enabled)
     out.outerGlow = {
       enabled: true,
@@ -547,7 +696,15 @@ export function docToPsd(doc: Doc): { bytes: Uint8Array; warnings: string[] } {
       const base: PsdLayer = { name: l.name, hidden: !l.visible, opacity: l.opacity, blendMode: TO_PSD[l.blend] ?? 'normal', clipping: l.clip }
       if (l.lock && (l.lock.alpha || l.lock.pixels || l.lock.position)) base.protected = { transparency: !!l.lock.alpha, composite: !!l.lock.pixels, position: !!l.lock.position }
       const docMask = (): PsdLayer['mask'] =>
-        l.mask ? { left: 0, top: 0, right: W, bottom: H, defaultColor: 255, disabled: !l.mask.enabled, imageData: pixelData(l.mask.bitmap.width, l.mask.bitmap.height, l.mask.bitmap.data) } : undefined
+        (() => {
+          const em = effectiveMask(l, W, H)
+          if (l.vectorMask?.enabled) warn(`"${l.name}" 의 벡터 마스크는 픽셀 마스크로 저장했습니다.`)
+          return em
+            ? { left: 0, top: 0, right: W, bottom: H, defaultColor: 255, disabled: false, imageData: pixelData(em.bitmap.width, em.bitmap.height, em.bitmap.data) }
+            : l.mask
+              ? { left: 0, top: 0, right: W, bottom: H, defaultColor: 255, disabled: true, imageData: pixelData(l.mask.bitmap.width, l.mask.bitmap.height, l.mask.bitmap.data) }
+              : undefined
+        })()
       if (l.kind === 'group') {
         out.push({ ...base, opened: !l.collapsed, children: build(l.id), mask: docMask() })
         continue
@@ -558,6 +715,7 @@ export function docToPsd(doc: Doc): { bytes: Uint8Array; warnings: string[] } {
         continue
       }
       if (!l.bitmap) continue
+      if (l.vectorMask?.enabled) warn(`"${l.name}" 의 벡터 마스크는 픽셀 마스크로 저장했습니다.`)
       if (l.kind === 'text') warn('문자 레이어는 픽셀로 저장했습니다 (Photoshop 에서 글자를 다시 고칠 수는 없습니다).')
       const t = l.transform
       let left = Math.round(t.x)
@@ -566,7 +724,8 @@ export function docToPsd(doc: Doc): { bytes: Uint8Array; warnings: string[] } {
       let maskImg: PixelData | undefined
       if (isIdentityPlacement(t, l.bitmap.width, l.bitmap.height)) {
         img = pixelData(l.bitmap.width, l.bitmap.height, l.bitmap.data)
-        if (l.mask) maskImg = pixelData(l.mask.bitmap.width, l.mask.bitmap.height, l.mask.bitmap.data)
+        const em = effectiveMask(l, W, H) ?? (l.mask ? l.mask : null)
+        if (em) maskImg = pixelData(em.bitmap.width, em.bitmap.height, em.bitmap.data)
       } else {
         // 회전·크기 변형은 PSD 레이어에 담을 수 없다 → 문서에 맞춰 굽는다
         const r = rasterizeBitmap(l.bitmap, l, W, H)
@@ -574,8 +733,9 @@ export function docToPsd(doc: Doc): { bytes: Uint8Array; warnings: string[] } {
         left = r.x
         top = r.y
         img = pixelData(r.width, r.height, r.data)
-        if (l.mask) {
-          const m = rasterizeBitmap(l.mask.bitmap, l, W, H)
+        const em = effectiveMask(l, W, H) ?? (l.mask ? l.mask : null)
+        if (em) {
+          const m = rasterizeBitmap(em.bitmap, l, W, H)
           if (m && m.x === r.x && m.y === r.y && m.width === r.width && m.height === r.height) maskImg = pixelData(m.width, m.height, m.data)
         }
       }
@@ -587,7 +747,9 @@ export function docToPsd(doc: Doc): { bytes: Uint8Array; warnings: string[] } {
         bottom: top + img.height,
         imageData: img,
         effects: effectsTo(l.effects),
-        mask: l.mask && maskImg ? { left, top, right: left + maskImg.width, bottom: top + maskImg.height, defaultColor: 255, disabled: !l.mask.enabled, imageData: maskImg } : undefined
+        mask: maskImg
+          ? { left, top, right: left + maskImg.width, bottom: top + maskImg.height, defaultColor: 255, disabled: !l.vectorMask?.enabled && !!l.mask && !l.mask.enabled, imageData: maskImg }
+          : undefined
       })
     }
     return out

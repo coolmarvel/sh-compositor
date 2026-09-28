@@ -15,6 +15,9 @@ import {
   redo as hRedo,
   HISTORY_BUDGET_MB,
   DEFAULT_BRUSH,
+  makeLayer,
+  identityTransform,
+  type Bitmap,
   type History,
   type Doc,
   type BrushSettings,
@@ -25,7 +28,25 @@ import type { View } from '../gl/GLRenderer'
 import { adaptView } from './view'
 
 export type Tool =
-  'move' | 'marquee' | 'lasso' | 'wand' | 'objectSelect' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur' | 'gradient' | 'shape' | 'type' | 'eyedropper' | 'hand' | 'zoom' | 'idle'
+  | 'move'
+  | 'marquee'
+  | 'lasso'
+  | 'wand'
+  | 'objectSelect'
+  | 'crop'
+  | 'brush'
+  | 'spotHealing'
+  | 'cloneStamp'
+  | 'blur'
+  | 'dodge'
+  | 'gradient'
+  | 'shape'
+  | 'pen'
+  | 'type'
+  | 'eyedropper'
+  | 'hand'
+  | 'zoom'
+  | 'idle'
 
 export interface Tab {
   id: string
@@ -59,6 +80,12 @@ export interface ToolSettings {
   brushMode: 'paint' | 'erase'
   blurMode: 'blur' | 'smudge' | 'liquify'
   blurStrength: number
+  /** 닷지·번·스펀지 (O) */
+  toneMode: 'dodge' | 'burn' | 'sponge'
+  toneRange: 'shadows' | 'midtones' | 'highlights'
+  /** 노출 1~100 */
+  toneExposure: number
+  toneSaturate: boolean
   healMode: 'contentAware' | 'proximity'
   cloneAligned: boolean
   cloneSampleAll: boolean
@@ -110,6 +137,10 @@ export const DEFAULT_SETTINGS: ToolSettings = {
   brushMode: 'paint',
   blurMode: 'blur',
   blurStrength: 50,
+  toneMode: 'dodge',
+  toneRange: 'midtones',
+  toneExposure: 50,
+  toneSaturate: false,
   healMode: 'contentAware',
   cloneAligned: true,
   cloneSampleAll: false,
@@ -163,8 +194,10 @@ export type DialogKind =
   | { kind: 'removeBg' }
   | { kind: 'newGuide' }
   | { kind: 'preferences' }
+  | { kind: 'brush' }
   | { kind: 'refineEdge' }
-  | { kind: 'moreAdjust'; which: MoreAdjustKind }
+  | { kind: 'colorRange' }
+  | { kind: 'moreAdjust'; which: MoreAdjustKind; layerId?: string }
 
 export interface EditorState {
   tabs: Tab[]
@@ -177,6 +210,10 @@ export interface EditorState {
   selectedIds: string[]
   /** 레이어 대신 마스크를 칠하는 중 */
   maskEditing: boolean
+  /** 퀵 마스크 모드 (Q) — 선택 영역을 붓으로 고친다. 선택 안 된 곳이 빨갛게 보인다 */
+  quickMask: boolean
+  /** 패스 패널·펜 도구가 다루는 패스 (doc.paths 의 id) */
+  activePathId: string | null
   /** 도구가 진행 중일 때 캔버스가 대신 그리는 문서 (칠하는 중·그라데이션 미리보기) — 이력 밖 */
   preview: Doc | null
   /** preview 를 만들 때의 문서 — 문서가 바뀌면(다른 명령·실행취소) 그 미리보기는 낡은 것이라 그리지 않는다 */
@@ -203,6 +240,31 @@ function withView(t: Tab): Tab {
   return nv === v ? t : { ...t, view: nv }
 }
 
+/** 퀵 마스크 표시 — 선택 안 된 곳(마스크 = 255 − 선택)에 빨간 반투명 레이어를 얹은 문서. 픽셀 편집이 아니라 보기 전용 */
+const QUICK_TINT: Bitmap = { width: 1, height: 1, data: new Uint8ClampedArray([255, 0, 0, 255]) }
+export const QUICK_MASK_LAYER_ID = '__quick_mask__'
+const tintCache = new WeakMap<object, Bitmap>()
+/** 선택의 반전을 회색 비트맵으로 (문서 크기). 선택이 없으면 전부 0 = 물들이지 않음 */
+export function quickMaskTint(d: Doc): Bitmap {
+  const key = d.selection ?? d
+  let b = tintCache.get(key)
+  if (b && b.width === d.width && b.height === d.height) return b
+  const data = new Uint8ClampedArray(d.width * d.height * 4)
+  const m = d.selection?.mask
+  for (let i = 0; i < d.width * d.height; i++) {
+    const v = m ? 255 - m[i] : 0
+    data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = v
+    data[i * 4 + 3] = 255
+  }
+  b = { width: d.width, height: d.height, data }
+  tintCache.set(key, b)
+  return b
+}
+export function withQuickMask(d: Doc, tint: Bitmap): Doc {
+  const layer = makeLayer('pixel', '퀵 마스크', QUICK_TINT, identityTransform(d.width, d.height), { opacity: 0.5, mask: { bitmap: tint, enabled: true, linked: false } })
+  return { ...d, selection: null, layers: [...d.layers, { ...layer, id: QUICK_MASK_LAYER_ID }] }
+}
+
 let idSeq = 0
 export const tabId = (): string => `t${++idSeq}`
 
@@ -217,6 +279,8 @@ export class EditorStore {
     bg: [255, 255, 255],
     selectedIds: [],
     maskEditing: false,
+    quickMask: false,
+    activePathId: null,
     preview: null,
     previewBase: null,
     status: '',
@@ -286,13 +350,13 @@ export class EditorStore {
     const i = this.state.tabs.findIndex((t) => t.id === id)
     const tabs = this.state.tabs.filter((t) => t.id !== id)
     const next = this.state.activeTabId === id ? (tabs[Math.min(i, tabs.length - 1)]?.id ?? null) : this.state.activeTabId
-    this.set({ tabs, activeTabId: next, maskEditing: false })
+    this.set({ tabs, activeTabId: next, maskEditing: false, quickMask: false, activePathId: null })
     this.syncSelected()
   }
 
   switchTab(id: string): void {
     if (id === this.state.activeTabId) return
-    this.set({ activeTabId: id, maskEditing: false })
+    this.set({ activeTabId: id, maskEditing: false, quickMask: false, activePathId: null })
     this.syncSelected()
   }
 
@@ -431,7 +495,12 @@ export class EditorStore {
   get shownDoc(): Doc | null {
     const d = this.doc
     const p = this.state.preview
-    return p && this.state.previewBase === d ? p : d
+    if (p && this.state.previewBase === d) return p
+    return d && this.state.quickMask ? withQuickMask(d, quickMaskTint(d)) : d
+  }
+  toggleQuickMask(): void {
+    if (!this.doc) return
+    this.set({ quickMask: !this.state.quickMask, maskEditing: false })
   }
 
   /** 스냅샷 — 지금 문서에 이름을 붙여 남긴다 */

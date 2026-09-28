@@ -12,9 +12,11 @@ import { loadConfig } from './config'
 import { WorkerThreadRunner } from './workerRunner'
 import { createHttpApp, jsonLogger } from './http'
 import { createMcpServer } from './mcp'
+import { loadKernels } from './kernels'
 
 async function main(): Promise<void> {
   const config = loadConfig()
+  loadKernels()
   const runner = new WorkerThreadRunner(new URL('./taskWorker.mjs', import.meta.url), config.workerHeapMb)
   const service = new DocumentService({ runner, limits: config.limits })
   const stop = async (app?: { close(): Promise<void> }): Promise<void> => {

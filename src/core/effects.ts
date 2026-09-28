@@ -49,6 +49,57 @@ export interface LayerEffects {
   innerShadow: ShadowEffect
   /** 외부 광선 (v1.1 — 없으면 끔) */
   outerGlow?: GlowEffect
+  /** 그라데이션 덮기 (v1.2 — 없으면 끔). 색 덮기 아래에 깔린다 (포토샵 순서) */
+  gradientOverlay?: GradientOverlayEffect
+  /** 경사와 엠보스 (v1.2 — 없으면 끔). 맨 위에 얹힌다 */
+  bevel?: BevelEffect
+}
+
+export interface GradientOverlayEffect {
+  enabled: boolean
+  style: 'linear' | 'radial'
+  /** 도, 0 = 왼쪽→오른쪽, 90 = 아래→위 (포토샵과 같음) */
+  angle: number
+  colors: [string, string]
+  opacity: number
+  /** 모양 크기 대비 % (10~150) */
+  scale: number
+  reverse: boolean
+}
+export const DEFAULT_GRADIENT_OVERLAY: GradientOverlayEffect = { enabled: false, style: 'linear', angle: 90, colors: ['#000000', '#ffffff'], opacity: 1, scale: 100, reverse: false }
+
+export interface BevelEffect {
+  enabled: boolean
+  /** inner = 모양 안쪽 경사, outer = 바깥쪽, emboss = 둘 다 */
+  style: 'inner' | 'outer' | 'emboss'
+  /** 경사 폭 px */
+  size: number
+  /** 깊이 % (1~500) */
+  depth: number
+  /** 부드럽게 px */
+  soften: number
+  /** 빛 각도 도 (반시계, 90 = 위) · 고도 (0~90) */
+  angle: number
+  altitude: number
+  direction: 'up' | 'down'
+  highlightColor: string
+  highlightOpacity: number
+  shadowColor: string
+  shadowOpacity: number
+}
+export const DEFAULT_BEVEL: BevelEffect = {
+  enabled: false,
+  style: 'inner',
+  size: 5,
+  depth: 100,
+  soften: 0,
+  angle: 120,
+  altitude: 30,
+  direction: 'up',
+  highlightColor: '#ffffff',
+  highlightOpacity: 0.75,
+  shadowColor: '#000000',
+  shadowOpacity: 0.75
 }
 
 export const DEFAULT_GLOW: GlowEffect = { enabled: false, size: 20, spread: 0, color: '#ffffbe', opacity: 0.75 }
@@ -62,7 +113,7 @@ export const DEFAULT_EFFECTS: LayerEffects = {
 }
 
 export function hasEffects(e: LayerEffects | null | undefined): e is LayerEffects {
-  return !!e && (e.stroke.enabled || e.shadow.enabled || e.overlay.enabled || e.innerShadow.enabled || !!e.outerGlow?.enabled)
+  return !!e && (e.stroke.enabled || e.shadow.enabled || e.overlay.enabled || e.innerShadow.enabled || !!e.outerGlow?.enabled || !!e.gradientOverlay?.enabled || !!e.bevel?.enabled)
 }
 
 /** 그림자가 떨어지는 방향 (px, y 아래로) */
@@ -77,6 +128,7 @@ export function effectsMargin(e: LayerEffects): number {
   if (e.stroke.enabled && !e.stroke.inside) m = Math.max(m, e.stroke.size)
   if (e.shadow.enabled) m = Math.max(m, e.shadow.distance + e.shadow.blur * 3)
   if (e.outerGlow?.enabled) m = Math.max(m, e.outerGlow.size * 1.6)
+  if (e.bevel?.enabled && e.bevel.style !== 'inner') m = Math.max(m, e.bevel.size + e.bevel.soften * 2)
   return hasEffects(e) ? Math.ceil(m) + 2 : 0
 }
 
@@ -87,7 +139,9 @@ export function scaleEffects(e: LayerEffects, s: number): LayerEffects {
     shadow: { ...e.shadow, distance: e.shadow.distance * s, blur: e.shadow.blur * s },
     overlay: e.overlay,
     innerShadow: { ...e.innerShadow, distance: e.innerShadow.distance * s, blur: e.innerShadow.blur * s },
-    outerGlow: e.outerGlow ? { ...e.outerGlow, size: e.outerGlow.size * s } : undefined
+    outerGlow: e.outerGlow ? { ...e.outerGlow, size: e.outerGlow.size * s } : undefined,
+    gradientOverlay: e.gradientOverlay,
+    bevel: e.bevel ? { ...e.bevel, size: e.bevel.size * s, soften: e.bevel.soften * s } : undefined
   }
 }
 
@@ -241,6 +295,8 @@ export function renderEffects(rgba: Uint8ClampedArray, width: number, height: nu
     out[o + 2] = pixels[o + 2] + out[o + 2] * inv
     out[o + 3] = pixels[o + 3] + out[o + 3] * inv
   }
+  const go = e.gradientOverlay
+  if (go?.enabled && go.opacity > 0) gradientOver(out, shape, W, H, inset, width, height, go)
   if (e.overlay.enabled && e.overlay.opacity > 0) fillOver(out, shape, e.overlay.color, e.overlay.opacity)
   if (e.innerShadow.enabled && e.innerShadow.opacity > 0) {
     const { dx, dy } = shadowOffset(e.innerShadow)
@@ -249,6 +305,8 @@ export function renderEffects(rgba: Uint8ClampedArray, width: number, height: nu
     for (let i = 0; i < inside.length; i++) inside[i] = Math.max(0, Math.min(1, shape[i] * (1 - moved[i])))
     fillOver(out, inside, e.innerShadow.color, e.innerShadow.opacity)
   }
+  const bv = e.bevel
+  if (bv?.enabled && bv.size > 0) bevelOver(out, shape, W, H, bv)
   if (stroke && e.stroke.inside) fillOver(out, strokeRing(), e.stroke.color, e.stroke.opacity)
   // 스트레이트 알파로
   const data = new Uint8ClampedArray(W * H * 4)
@@ -263,4 +321,68 @@ export function renderEffects(rgba: Uint8ClampedArray, width: number, height: nu
     }
   }
   return { data, width: W, height: H, inset }
+}
+
+/** 그라데이션 덮기 — 모양(원래 픽셀 경계 상자) 기준 각도·크기로 두 색 사이를 source-over */
+function gradientOver(dst: Float32Array, shape: Float32Array, W: number, H: number, inset: number, width: number, height: number, g: GradientOverlayEffect): void {
+  const c0 = parseHex(g.reverse ? g.colors[1] : g.colors[0])
+  const c1 = parseHex(g.reverse ? g.colors[0] : g.colors[1])
+  const cx = inset + width / 2
+  const cy = inset + height / 2
+  const sc = Math.max(0.1, g.scale / 100)
+  const r = (g.angle * Math.PI) / 180
+  const dx = Math.cos(r)
+  const dy = -Math.sin(r)
+  // 선형: 모양을 각도 방향으로 관통하는 길이의 절반 (포토샵처럼 모양에 맞춘다)
+  const half = ((Math.abs(dx) * width + Math.abs(dy) * height) / 2) * sc
+  const rad = (Math.max(width, height) / 2) * sc
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x
+      const a = shape[i] * g.opacity
+      if (a <= 0) continue
+      const px = x + 0.5 - cx
+      const py = y + 0.5 - cy
+      const t = g.style === 'radial' ? Math.min(1, Math.hypot(px, py) / rad) : Math.min(1, Math.max(0, (px * dx + py * dy) / (half * 2) + 0.5))
+      const o = i * 4
+      const inv = 1 - a
+      dst[o] = (c0[0] + (c1[0] - c0[0]) * t) * a + dst[o] * inv
+      dst[o + 1] = (c0[1] + (c1[1] - c0[1]) * t) * a + dst[o + 1] * inv
+      dst[o + 2] = (c0[2] + (c1[2] - c0[2]) * t) * a + dst[o + 2] * inv
+      dst[o + 3] = 255 * a + dst[o + 3] * inv
+    }
+}
+
+/**
+ * 경사와 엠보스 — 높이 = 모양(안쪽) 또는 넓힌 모양(바깥)을 size 만큼 흐린 것. 높이의 기울기와 빛 방향의 내적으로
+ * 밝은 면(하이라이트)·어두운 면(그림자)을 나눠 얹는다. 포토샵의 정확한 수식은 아니지만 각도·고도·깊이·크기의 뜻은 같다.
+ */
+function bevelOver(dst: Float32Array, shape: Float32Array, W: number, H: number, b: BevelEffect): void {
+  const size = Math.max(1, b.size)
+  const outer = b.style !== 'inner' ? extreme(shape, W, H, size, false) : null
+  const base = b.style === 'outer' ? outer! : b.style === 'emboss' ? outer! : shape
+  const height = blurMask(base, W, H, size / 2)
+  const r = (b.angle * Math.PI) / 180
+  const alt = (Math.max(0, Math.min(90, b.altitude)) * Math.PI) / 180
+  const lx = Math.cos(r) * Math.cos(alt)
+  const ly = -Math.sin(r) * Math.cos(alt)
+  const depth = (b.depth / 100) * (b.direction === 'down' ? -1 : 1)
+  const hi = new Float32Array(W * H)
+  const sh = new Float32Array(W * H)
+  // 어디에 칠하나: inner = 모양 안, outer = 넓힌 띠(바깥), emboss = 둘 다
+  for (let y = 1; y < H - 1; y++)
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x
+      const region = b.style === 'inner' ? shape[i] : b.style === 'outer' ? Math.max(0, outer![i] - shape[i]) : outer![i]
+      if (region <= 0) continue
+      const gx = (height[i + 1] - height[i - 1]) * size
+      const gy = (height[i + W] - height[i - W]) * size
+      // 법선 = (−∂h/∂x, −∂h/∂y, 1) — 빛을 향한 면이 밝다
+      const s = -(gx * lx + gy * ly) * depth * 1.5
+      if (s > 0) hi[i] = Math.min(1, s) * region
+      else if (s < 0) sh[i] = Math.min(1, -s) * region
+    }
+  const soft = b.soften > 0 ? (m: Float32Array): Float32Array => blurMask(m, W, H, b.soften / 2) : (m: Float32Array): Float32Array => m
+  fillOver(dst, soft(sh), b.shadowColor, b.shadowOpacity)
+  fillOver(dst, soft(hi), b.highlightColor, b.highlightOpacity)
 }

@@ -11,6 +11,7 @@ import { typeTool, commitTextDraft, type TextDraft, zoomAt } from '../tools/misc
 import { clearHover } from '../tools/paint'
 import { importAsLayer, openBytes, keepsPath } from '../editor/io'
 import { fontCss } from '../editor/text'
+import { applyRun, shiftRuns } from '@core/index'
 import type { ToolCtx, PointerInfo, ToolHandler } from '../tools/types'
 import { registerCommands, registerThumbnail } from '../editor/commands'
 import { Ruler, RULER } from './Rulers'
@@ -104,7 +105,7 @@ export default function CanvasView(): JSX.Element {
       // 문서 테두리
       g.strokeStyle = 'rgba(0,0,0,.6)'
       g.strokeRect(Math.round(v.panX) - 0.5, Math.round(v.panY) - 0.5, Math.round(doc.width * v.zoom) + 1, Math.round(doc.height * v.zoom) + 1)
-      if (doc.selection) drawSelection(ctx, g, doc.selection)
+      if (doc.selection && !editor.state.quickMask) drawSelection(ctx, g, doc.selection)
       toolInfo(editor.state.tool)?.handler.overlay?.(ctx, g)
       // 안내선 (청록 1px) + 끌고 있는 안내선
       if (editor.state.settings.showGuides || guideDrag.current) {
@@ -226,10 +227,24 @@ export default function CanvasView(): JSX.Element {
   useEffect(() => setDraft(null), [tabId])
 
   // 문자 도구 → 편집 상자
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const draftRef = useRef<TextDraft | null>(null)
+  draftRef.current = draft
   useEffect(() => {
     typeTool.onDraft = (d) => setDraft(d)
+    // 선택한 글자 구간에만 서식 — textarea 의 selectionStart/End 로
+    typeTool.onRunPatch = (patch) => {
+      const ta = taRef.current
+      const d = draftRef.current
+      if (!ta || !d || ta.selectionStart === ta.selectionEnd) return false
+      const runs = applyRun(d.data.runs, ta.selectionStart, ta.selectionEnd, patch, ta.value.length)
+      setDraft({ ...d, data: { ...d.data, text: ta.value, runs } })
+      ta.focus()
+      return true
+    }
     return () => {
       typeTool.onDraft = undefined
+      typeTool.onRunPatch = undefined
     }
   }, [])
 
@@ -473,9 +488,20 @@ export default function CanvasView(): JSX.Element {
           <Box
             component="textarea"
             autoFocus
+            ref={taRef}
             data-testid="text-editor"
             defaultValue={draft.data.text}
-            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setDraft({ ...draft, data: { ...draft.data, text: e.target.value } })}
+            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+              // 글자를 넣고 지운 자리를 찾아 글자별 서식 구간을 따라 옮긴다
+              const prev = draft.data.text
+              const next = e.target.value
+              let a = 0
+              while (a < prev.length && a < next.length && prev[a] === next[a]) a++
+              let b = 0
+              while (b < prev.length - a && b < next.length - a && prev[prev.length - 1 - b] === next[next.length - 1 - b]) b++
+              const runs = shiftRuns(draft.data.runs, a, prev.length - a - b, next.length - a - b)
+              setDraft({ ...draft, data: { ...draft.data, text: next, runs } })
+            }}
             onKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
               e.stopPropagation()
               if (e.key === 'Escape') setDraft(null)
@@ -487,6 +513,12 @@ export default function CanvasView(): JSX.Element {
               }
             }}
             onBlur={(e: React.FocusEvent<HTMLTextAreaElement>) => {
+              // 도구 옵션 줄(굵게·글꼴·크기·색)이나 그 목록으로 초점이 갔을 때는 편집을 이어간다 — 선택한 구간에 서식을 주고 초점이 돌아온다
+              const to = e.relatedTarget as HTMLElement | null
+              if (to?.closest?.('[aria-label="도구 옵션"], .MuiPopover-root, .MuiPopper-root, [role="listbox"], [role="dialog"]')) {
+                setDraft({ ...draft, data: { ...draft.data, text: e.currentTarget.value } })
+                return
+              }
               commitTextDraft({ ...draft, data: { ...draft.data, text: e.currentTarget.value } })
               setDraft(null)
             }}

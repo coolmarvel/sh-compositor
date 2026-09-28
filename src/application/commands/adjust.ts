@@ -1,6 +1,6 @@
 /** 보정 명령 — 레벨·커브·색조/채도·노출 등(Adjustments), 빠른 보정(반전·채도 감소·자동), 흑백·색상 균형·활기·포스터화·한계값 */
 import { DEFAULT_ADJUST, DEFAULT_TONE, COLOR_RANGES, autoLevelsFor, histogram, hasAdjust, type Adjustments, type CurvePoint, type ChannelTone, type AutoLevelsMode } from '../../core/adjust'
-import { DEFAULT_MORE, DEFAULT_BW, DEFAULT_CB, applyMoreAdjust, type MoreAdjust, type MoreAdjustKind } from '../../core/adjust2'
+import { DEFAULT_MORE, applyMoreAdjust, type MoreAdjust, type MoreAdjustKind } from '../../core/adjust2'
 import { getLayer } from '../../core/doc/ops'
 import { bakeLayer, adjustLayer, editPixels } from '../../core/doc/pixels'
 import { invalid } from '../errors'
@@ -154,40 +154,46 @@ export const adjustQuickCommand: DocCommand<{ layerId: string; kind: 'invert' | 
 
 // ── adjust.more ──
 export const MORE_KINDS: MoreAdjustKind[] = ['blackWhite', 'colorBalance', 'vibrance', 'posterize', 'threshold']
+
+/** 흑백·색상 균형·활기·포스터화·한계값 입력 (부분) → MoreAdjust (base 위에 덮음). 파괴적 보정과 조정 레이어가 같이 쓴다 */
+export function moreOf(raw: unknown, base: MoreAdjust): MoreAdjust {
+  const o = object(raw, 'more')
+  onlyKeys(o, ['kind', 'blackWhite', 'colorBalance', 'vibrance', 'saturation', 'levels', 'threshold'], 'more')
+  const kind = oneOf(o, 'kind', MORE_KINDS, base.kind)!
+  const more: MoreAdjust = { ...base, kind }
+  if (o.blackWhite !== undefined) {
+    const b = object(o.blackWhite, 'blackWhite')
+    const keys = ['reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas'] as const
+    onlyKeys(b, keys, 'blackWhite')
+    more.bw = { ...base.bw }
+    for (const k of keys) more.bw[k] = num(b, k, -200, 300, base.bw[k])!
+  }
+  if (o.colorBalance !== undefined) {
+    const c = object(o.colorBalance, 'colorBalance')
+    onlyKeys(c, ['shadows', 'midtones', 'highlights', 'preserveLuminosity'], 'colorBalance')
+    more.cb = { ...base.cb, preserveLuminosity: bool(c, 'preserveLuminosity', base.cb.preserveLuminosity)! }
+    for (const k of ['shadows', 'midtones', 'highlights'] as const)
+      if (c[k] !== undefined) {
+        const v = c[k]
+        if (!Array.isArray(v) || v.length !== 3 || v.some((x) => typeof x !== 'number' || x < -100 || x > 100))
+          throw invalid(`${k}는 -100~100 숫자 3개 [빨강↔청록, 초록↔자홍, 파랑↔노랑] 이어야 합니다.`, { field: k })
+        more.cb[k] = [v[0], v[1], v[2]]
+      }
+  }
+  more.vibrance = num(o, 'vibrance', -100, 100, base.vibrance)!
+  more.saturation = num(o, 'saturation', -100, 100, base.saturation)!
+  more.levels = int(o, 'levels', 2, 255, base.levels)!
+  more.threshold = int(o, 'threshold', 1, 255, base.threshold)!
+  return more
+}
 export const adjustMoreCommand: DocCommand<{ layerId: string; more: MoreAdjust }> = {
   name: 'adjust.more',
   heavy: true,
   parse(raw) {
     const o = object(raw)
     onlyKeys(o, ['layerId', 'kind', 'blackWhite', 'colorBalance', 'vibrance', 'saturation', 'levels', 'threshold'])
-    const kind = oneOf(o, 'kind', MORE_KINDS)
-    const more: MoreAdjust = { ...DEFAULT_MORE, kind }
-    if (kind === 'blackWhite' && o.blackWhite !== undefined) {
-      const b = object(o.blackWhite, 'blackWhite')
-      const keys = ['reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas'] as const
-      onlyKeys(b, keys, 'blackWhite')
-      more.bw = { ...DEFAULT_BW }
-      for (const k of keys) more.bw[k] = num(b, k, -200, 300, DEFAULT_BW[k])!
-    }
-    if (kind === 'colorBalance' && o.colorBalance !== undefined) {
-      const c = object(o.colorBalance, 'colorBalance')
-      onlyKeys(c, ['shadows', 'midtones', 'highlights', 'preserveLuminosity'], 'colorBalance')
-      more.cb = { ...DEFAULT_CB, preserveLuminosity: bool(c, 'preserveLuminosity', true)! }
-      for (const k of ['shadows', 'midtones', 'highlights'] as const)
-        if (c[k] !== undefined) {
-          const v = c[k]
-          if (!Array.isArray(v) || v.length !== 3 || v.some((x) => typeof x !== 'number' || x < -100 || x > 100))
-            throw invalid(`${k}는 -100~100 숫자 3개 [빨강↔청록, 초록↔자홍, 파랑↔노랑] 이어야 합니다.`, { field: k })
-          more.cb[k] = [v[0], v[1], v[2]]
-        }
-    }
-    if (kind === 'vibrance') {
-      more.vibrance = num(o, 'vibrance', -100, 100, 0)!
-      more.saturation = num(o, 'saturation', -100, 100, 0)!
-    }
-    if (kind === 'posterize') more.levels = int(o, 'levels', 2, 255, 4)!
-    if (kind === 'threshold') more.threshold = int(o, 'threshold', 1, 255, 128)!
-    return { layerId: id(o, 'layerId'), more }
+    const { layerId, ...rest } = o
+    return { layerId: id({ layerId }, 'layerId'), more: moreOf(rest, DEFAULT_MORE) }
   },
   run(doc, i) {
     const l = pixelLayer(doc, i.layerId, '보정')

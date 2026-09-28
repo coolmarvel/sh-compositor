@@ -12,9 +12,10 @@ domain: development
 
 ## 이어받는 기준점
 
-- 코드 기준: v1.1.1 (미커밋). 직전 커밋은 v1.1.0 `62d3932`(origin/main). 커밋·푸시는 사용자가 시키면 한다 (2026-09-23 에는 사용자 지시로 에이전트가 커밋·푸시했다).
+- 코드 기준: v1.2.0 (미커밋). 직전 커밋은 v1.1.1 `965357d`(origin/main). 커밋·푸시는 사용자가 시키면 한다 (2026-09-23 에는 사용자 지시로 에이전트가 커밋·푸시했다).
 - v1.1.0 = 계획 0004의 1~5단계 MVP: Worker 취소·기한, 이력 메모리 예산, `src/application` 명령 계층, 웹 로컬 편집기, headless 서버, MCP(stdio·Streamable HTTP).
 - v1.1.1 = MCP 도구 51개(편집기 순수 기능 전부), PSD 서버 지원, 사용 설명서 MCP 탭, 도형 순수 래스터라이저. 도구 목록 SSOT 는 `src/application/catalog.ts`.
+- v1.2.0 = 포토샵 대비 부족 8가지(닷지·번·스펀지, 조정 레이어 5종, 색상 범위·퀵 마스크, 그라데이션 덮기·경사와 엠보스, 브러시 팁·질감, 글자별 서식, 펜·패스·벡터 마스크) + Rust 필터 커널(블러·중간값) + 서버 JPEG. MCP 58도구. ADR-0006. 16비트 색은 하지 않았다.
 - 검증 명령과 건수는 CLAUDE.md "자주 쓰는 명령"과 session-log 최상단 블록에 있다.
 - CPU 비트맵이 진실이고 GPU는 표시용 거울이다. 문서 스냅샷과 이력의 공유 버퍼를 변경하거나 Worker 전송으로 detach하지 않는다.
 
@@ -25,10 +26,11 @@ domain: development
 - 서버 한도 숫자(40MP·동시 2작업 등)는 기본값이다. 실제 메모리·동시성 측정으로 정한 값이 아니다.
 - MCP 프로토콜은 SDK 1.30.0이 지원하는 2025-11-25로 고정했다. Claude Code 는 실제로 붙여 확인했다(2026-09-23). ChatGPT 등 다른 클라이언트는 아직이다. 사용자는 Claude 전용이 아닌 범용 MCP 를 원한다 — 표준 밖 기능에 기대지 않는다.
 - `editor.commit`은 활성 탭에 넣는다. await 뒤에 커밋하는 동작은 `commandBridge.capture()`→`land()`를 쓴다.
-- Rust WASM은 동기 CPU 연산이다. 큰 붓·획 시작 복사·합성·업로드 비용은 따로 측정해야 한다.
+- Rust WASM은 동기 CPU 연산이다. 큰 붓·획 시작 복사·합성·업로드 비용은 따로 측정해야 한다. 커널 추가는 `test/kernel-bench.ts` 1.5배 기준을 통과할 때만 (닷지·번은 탈락했다).
+- Q 는 퀵 마스크다 (v1.2.0). 벡터 마스크는 패스의 복사본이고 합성은 `core/doc/path.ts effectiveMask` 한 곳을 거친다 — CPU·GL·PSD 가 따로 래스터화하지 않는다.
 
 ## 다음 세션 시작 지시문
 
-> CLAUDE.md로 부팅하고 session-log → todo → docs/handoff.md → 필요하면 guides/web-mcp.md·ADR-0005를 읽어라. 코드 기준은 v1.1.0이다.
+> CLAUDE.md로 부팅하고 session-log → todo → docs/handoff.md → 필요하면 guides/web-mcp.md·ADR-0005·ADR-0006을 읽어라. 코드 기준은 v1.2.0이다.
 > 사용자 피드백(스크린샷)이 있으면 먼저 반영한다. 없으면 todo P1(설치본 검증)의 결과를 묻고, P2 중 사용자가 고른 항목 하나를 수행하라.
 > 명령을 늘릴 때는 application 명령 → MCP 도구 → 단위·e2e:mcp 순서로 하고, UI에 같은 동작이 있으면 runCommand로 바꿔 결과를 맞춘다.

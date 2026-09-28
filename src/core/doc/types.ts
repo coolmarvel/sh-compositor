@@ -10,6 +10,9 @@
 import type { LayerEffects } from '../effects'
 import type { Adjustments } from '../adjust'
 import type { Filters } from '../filters'
+import type { MoreAdjust } from '../adjust2'
+import type { TextRun } from './textruns'
+import type { VectorMask, DocPath } from './path'
 
 /** 스트레이트 알파 RGBA 비트맵 — 한 번 문서에 들어가면 수정하지 않는다 */
 export interface Bitmap {
@@ -81,7 +84,7 @@ export interface LayerMask {
   linked: boolean
 }
 
-export type AdjustmentKind = 'levels' | 'curves' | 'hueSaturation' | 'exposure' | 'gradientMap' | 'grain' | 'invert'
+export type AdjustmentKind = 'levels' | 'curves' | 'hueSaturation' | 'exposure' | 'gradientMap' | 'grain' | 'invert' | 'blackWhite' | 'colorBalance' | 'vibrance' | 'posterize' | 'threshold'
 
 export const ADJUSTMENT_KINDS: { key: AdjustmentKind; label: string }[] = [
   { key: 'levels', label: '레벨' },
@@ -90,8 +93,16 @@ export const ADJUSTMENT_KINDS: { key: AdjustmentKind; label: string }[] = [
   { key: 'exposure', label: '노출' },
   { key: 'gradientMap', label: '그라데이션 맵' },
   { key: 'grain', label: '그레인' },
-  { key: 'invert', label: '반전' }
+  { key: 'invert', label: '반전' },
+  { key: 'blackWhite', label: '흑백' },
+  { key: 'colorBalance', label: '색상 균형' },
+  { key: 'vibrance', label: '활기' },
+  { key: 'posterize', label: '포스터화' },
+  { key: 'threshold', label: '한계값' }
 ]
+
+/** 흑백·색상 균형·활기·포스터화·한계값 (adjust2 MoreAdjust) 을 조정 레이어로 둘 때의 종류 */
+export const MORE_ADJUSTMENT_KINDS: AdjustmentKind[] = ['blackWhite', 'colorBalance', 'vibrance', 'posterize', 'threshold']
 
 /** 문자 레이어 데이터 (Compositor `TypeTool`) — 픽셀은 이 값으로 다시 그린다 */
 export interface TextData {
@@ -111,6 +122,8 @@ export interface TextData {
   boxHeight: number
   /** 세로쓰기 — 줄(세로 단)이 오른쪽에서 왼쪽으로, 글자는 위에서 아래로 */
   vertical?: boolean
+  /** 글자별 서식 (v1.2) — 구간마다 굵게·기울임·색·크기·글꼴 (textruns.ts) */
+  runs?: TextRun[]
 }
 
 export type LayerKind = 'pixel' | 'group' | 'adjustment' | 'text'
@@ -132,7 +145,8 @@ export interface Layer {
   /** 바로 아래 레이어에 클리핑 (Compositor maskSourceID) */
   clip: boolean
   effects: LayerEffects | null
-  adjustment: { kind: AdjustmentKind; settings: Adjustments; filters?: Filters } | null
+  /** 조정 레이어 — kind 가 MORE_ADJUSTMENT_KINDS 면 `more` 가 실제 설정이고 settings 는 기본값 */
+  adjustment: { kind: AdjustmentKind; settings: Adjustments; filters?: Filters; more?: MoreAdjust } | null
   text: TextData | null
   /** 폴더 접힘 (화면 전용이지만 저장한다) */
   collapsed?: boolean
@@ -140,6 +154,8 @@ export interface Layer {
   shape?: ShapeData
   /** 잠금 (포토샵과 같은 세 가지) — alpha: 투명한 곳은 칠해지지 않음, pixels: 칠하기·지우기 금지, position: 이동·변형 금지 */
   lock?: LayerLock
+  /** 벡터 마스크 (v1.2, 문서 좌표 패스) — 픽셀 마스크와 곱해진다 (path.ts effectiveMask) */
+  vectorMask?: VectorMask
 }
 
 export interface ShapeData {
@@ -183,6 +199,8 @@ export interface Doc {
   selection: Selection | null
   /** 안내선 — v = 세로선의 x, h = 가로선의 y (문서 px). 저장한다 */
   guides?: Guides
+  /** 패스 (v1.2, 펜 도구) — 저장한다 */
+  paths?: DocPath[]
 }
 
 export interface Guides {

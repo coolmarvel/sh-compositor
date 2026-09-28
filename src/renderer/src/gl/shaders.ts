@@ -148,8 +148,35 @@ uniform bool uHasGrad;
 uniform float uGrain;
 uniform float uOpacity;
 uniform vec2 uTarget;
+// 흑백·색상 균형·활기·포스터화·한계값 (core/adjust2.ts 와 같은 식) — 0 = 없음
+uniform int uMore;
+uniform vec3 uBwA;        // reds, yellows, greens (÷100)
+uniform vec3 uBwB;        // cyans, blues, magentas (÷100)
+uniform vec3 uCbShadow;   // 청록↔빨강, 마젠타↔초록, 노랑↔파랑 (÷100)
+uniform vec3 uCbMid;
+uniform vec3 uCbHigh;
+uniform bool uCbLum;
+uniform vec2 uVib;        // 활기, 채도 (÷100)
+uniform float uLevels;
+uniform float uThreshold; // 0~255
 out vec4 outColor;
 float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+vec3 rgb2hsl(vec3 c) {
+  float mx = max(max(c.r, c.g), c.b); float mn = min(min(c.r, c.g), c.b); float l = (mx + mn) * 0.5;
+  if (mx == mn) return vec3(0.0, 0.0, l);
+  float d = mx - mn; float s = l > 0.5 ? d / (2.0 - mx - mn) : d / (mx + mn); float h;
+  if (mx == c.r) h = ((c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0)) / 6.0;
+  else if (mx == c.g) h = ((c.b - c.r) / d + 2.0) / 6.0;
+  else h = ((c.r - c.g) / d + 4.0) / 6.0;
+  return vec3(h, s, l);
+}
+float cbCurve(float l, vec3 amt) {
+  float a = 0.25; float bb = 0.333; float sc = 0.7;
+  float sh = clamp((l - bb) / -a + 0.5, 0.0, 1.0) * sc;
+  float mid = clamp((l - bb) / a + 0.5, 0.0, 1.0) * clamp((l + bb - 1.0) / -a + 0.5, 0.0, 1.0) * sc;
+  float hi = clamp((l + bb - 1.0) / a + 0.5, 0.0, 1.0) * sc;
+  return clamp(l + amt.x * sh + amt.y * mid + amt.z * hi, 0.0, 1.0);
+}
 float h2r(float p, float q, float t) {
   if (t < 0.0) t += 1.0; if (t > 1.0) t -= 1.0;
   if (t < 1.0/6.0) return p + (q - p) * 6.0 * t;
@@ -192,6 +219,34 @@ void main() {
     c = texture(uGrad, vec2((y + 0.5) / 256.0, 0.5)).rgb;
   }
   if (uGrain > 0.0) c = clamp(c + (hash(gl_FragCoord.xy) - 0.5) * uGrain * 1.6 / 255.0, 0.0, 1.0);
+  if (uMore == 1) {
+    // 흑백: 최소 + (중간−최소)·2차색 가중 + (최대−중간)·1차색 가중 (CPU 와 같은 분기)
+    float r = c.r; float g = c.g; float b = c.b; float mx; float md; float mn; float prim; float sec;
+    if (r >= g && r >= b) { mx = r; if (g >= b) { md = g; mn = b; sec = uBwA.y; } else { md = b; mn = g; sec = uBwB.z; } prim = uBwA.x; }
+    else if (g >= r && g >= b) { mx = g; if (r >= b) { md = r; mn = b; sec = uBwA.y; } else { md = b; mn = r; sec = uBwB.x; } prim = uBwA.z; }
+    else { mx = b; if (r >= g) { md = r; mn = g; sec = uBwB.z; } else { md = g; mn = r; sec = uBwB.x; } prim = uBwB.y; }
+    float v = clamp(mn + (md - mn) * sec + (mx - md) * prim, 0.0, 1.0);
+    c = vec3(v);
+  } else if (uMore == 2) {
+    vec3 n = vec3(cbCurve(c.r, vec3(uCbShadow.x, uCbMid.x, uCbHigh.x)), cbCurve(c.g, vec3(uCbShadow.y, uCbMid.y, uCbHigh.y)), cbCurve(c.b, vec3(uCbShadow.z, uCbMid.z, uCbHigh.z)));
+    if (uCbLum) {
+      vec3 hs = rgb2hsl(n); float l = rgb2hsl(c).z; float s = hs.y; float h = hs.x;
+      if (s <= 0.0) n = vec3(l);
+      else { float q = l < 0.5 ? l * (1.0 + s) : l + s - l * s; float p = 2.0 * l - q; n = vec3(h2r(p, q, h + 1.0/3.0), h2r(p, q, h), h2r(p, q, h - 1.0/3.0)); }
+    }
+    c = n;
+  } else if (uMore == 3) {
+    float mx = max(max(c.r, c.g), c.b); float mn = min(min(c.r, c.g), c.b); float cur = mx > 0.0 ? (mx - mn) / mx : 0.0;
+    float gray = dot(c, vec3(0.299, 0.587, 0.114)); float k = 1.0 + uVib.y + uVib.x * (1.0 - cur);
+    c = clamp(gray + (c - gray) * k, 0.0, 1.0);
+  } else if (uMore == 4) {
+    float n = uLevels - 1.0;
+    vec3 q = floor(c * 255.0 + 0.5) / 255.0;
+    c = floor(floor(q * n + 0.5) / n * 255.0 + 0.5) / 255.0;
+  } else if (uMore == 5) {
+    vec3 q = floor(c * 255.0 + 0.5);
+    c = vec3(dot(q, vec3(0.299, 0.587, 0.114)) >= uThreshold ? 1.0 : 0.0);
+  }
   float k = uOpacity;
   if (uHasMask) k *= texture(uMask, vUV).r;
   if (uHasClip) k *= texture(uClip, fc).a;

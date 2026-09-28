@@ -55,7 +55,9 @@ try {
   await dlg('adjust', { kind: 'adjust', tab: 'levels' }, ['커브', '노출', '색조/채도', '그레인·반전·맵'])
   await dlg('filters', { kind: 'filters' }, ['선명하게', '모자이크·노이즈 감소'])
   const lid = await page.evaluate(() => window.__sc.editor.doc.activeId)
-  await dlg('effects', { kind: 'effects', layerId: lid }, ['그림자', '색 덮기', '안쪽 그림자', '외부 광선'])
+  await dlg('effects', { kind: 'effects', layerId: lid }, ['그림자', '색 덮기', '그라데이션 덮기', '경사와 엠보스', '안쪽 그림자', '외부 광선'])
+  await dlg('colorRange', { kind: 'colorRange' })
+  await dlg('brush', { kind: 'brush' })
   await dlg('export-jpeg', { kind: 'export', format: 'jpeg' })
   await dlg('export-webp', { kind: 'export', format: 'webp' })
   await dlg('selectAmount', { kind: 'selectAmount', op: 'feather' })
@@ -69,7 +71,7 @@ try {
   await dlg('newGuide', { kind: 'newGuide' })
   await dlg('refineEdge', { kind: 'refineEdge' })
   for (const w of ['blackWhite', 'colorBalance', 'vibrance', 'posterize', 'threshold']) await dlg(`more-${w}`, { kind: 'moreAdjust', which: w })
-  await dlg('help', { kind: 'help' }, ['도구', '선택', '칠하기·고치기', '색 보정·필터', '레이어', '화면·파일'])
+  await dlg('help', { kind: 'help' }, ['도구', '선택', '칠하기·고치기', '색 보정·필터', '레이어', '화면·파일', 'MCP'])
   await dlg('recover', { kind: 'recover', items: [{ id: 'x', name: '고양이 합성', path: null, savedAt: Date.now() }] })
   // 메뉴
   for (const m of ['파일(F)', '편집(E)', '이미지(I)', '레이어(L)', '선택(S)', '필터(T)', '보기(V)', '도움말(H)']) {
@@ -81,7 +83,26 @@ try {
     await page.waitForTimeout(200)
   }
   // 도구 옵션 줄 (위쪽 띠만)
-  for (const k of ['move', 'marquee', 'lasso', 'wand', 'crop', 'brush', 'spotHealing', 'cloneStamp', 'blur', 'gradient', 'shape', 'type', 'eyedropper', 'hand', 'zoom', 'objectSelect']) {
+  for (const k of [
+    'move',
+    'marquee',
+    'lasso',
+    'wand',
+    'crop',
+    'brush',
+    'spotHealing',
+    'cloneStamp',
+    'blur',
+    'dodge',
+    'pen',
+    'gradient',
+    'shape',
+    'type',
+    'eyedropper',
+    'hand',
+    'zoom',
+    'objectSelect'
+  ]) {
     await page.locator(`[data-tool="${k}"]`).click()
     await page.waitForTimeout(200)
     await shot(page, `tool-${k}`, page.getByRole('toolbar', { name: '도구 옵션' }))

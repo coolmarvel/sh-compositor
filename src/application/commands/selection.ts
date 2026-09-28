@@ -13,6 +13,7 @@ import {
   smoothSelection,
   moveSelection,
   makeSelection,
+  colorRangeMask,
   type SelectMode
 } from '../../core/doc/selection'
 import { flattenDoc, rasterizeLayer } from '../../core/doc/render'
@@ -20,11 +21,14 @@ import { MAX_SIDE } from '../../core/limits'
 import { invalid } from '../errors'
 import { object, onlyKeys, int, num, bool, oneOf, id } from '../validate'
 import type { DocCommand } from './types'
-import { requireLayer, points } from './types'
+import { requireLayer, points, colorOf } from './types'
 
 export interface SelectionSetInput {
-  shape: 'all' | 'none' | 'invert' | 'rect' | 'ellipse' | 'polygon' | 'wand' | 'layerAlpha'
+  shape: 'all' | 'none' | 'invert' | 'rect' | 'ellipse' | 'polygon' | 'wand' | 'layerAlpha' | 'colorRange'
   mode: SelectMode
+  color?: [number, number, number]
+  fuzziness?: number
+  invert?: boolean
   x?: number
   y?: number
   width?: number
@@ -41,8 +45,8 @@ export const selectionSetCommand: DocCommand<SelectionSetInput> = {
   heavy: true,
   parse(raw) {
     const o = object(raw)
-    onlyKeys(o, ['shape', 'mode', 'x', 'y', 'width', 'height', 'points', 'tolerance', 'contiguous', 'sampleAll', 'layerId', 'antialias'])
-    const shape = oneOf(o, 'shape', ['all', 'none', 'invert', 'rect', 'ellipse', 'polygon', 'wand', 'layerAlpha'] as const)
+    onlyKeys(o, ['shape', 'mode', 'x', 'y', 'width', 'height', 'points', 'tolerance', 'contiguous', 'sampleAll', 'layerId', 'antialias', 'color', 'fuzziness', 'invert'])
+    const shape = oneOf(o, 'shape', ['all', 'none', 'invert', 'rect', 'ellipse', 'polygon', 'wand', 'layerAlpha', 'colorRange'] as const)
     const out: SelectionSetInput = { shape, mode: oneOf(o, 'mode', ['replace', 'add', 'subtract', 'intersect'] as const, 'replace')! }
     if (shape === 'rect' || shape === 'ellipse') {
       out.x = num(o, 'x', -MAX_SIDE, MAX_SIDE)
@@ -63,6 +67,13 @@ export const selectionSetCommand: DocCommand<SelectionSetInput> = {
       if (!out.sampleAll) out.layerId = id(o, 'layerId')
     }
     if (shape === 'layerAlpha') out.layerId = id(o, 'layerId')
+    if (shape === 'colorRange') {
+      out.color = colorOf(o, 'color')
+      out.fuzziness = num(o, 'fuzziness', 1, 200, 40)
+      out.invert = bool(o, 'invert', false)
+      out.sampleAll = bool(o, 'sampleAll', true)
+      if (!out.sampleAll) out.layerId = id(o, 'layerId')
+    }
     return out
   },
   run(doc, i) {
@@ -87,6 +98,14 @@ export const selectionSetCommand: DocCommand<SelectionSetInput> = {
           rgba = flattenDoc({ ...doc, selection: null, layers: [{ ...l, parentId: null, clip: false, visible: true, blend: 'normal', opacity: 1 }] }).data
         }
         mask = magicWand(rgba, W, H, i.x!, i.y!, i.tolerance!, i.contiguous!, 1)
+      } else if (i.shape === 'colorRange') {
+        let rgba: Uint8ClampedArray
+        if (i.sampleAll) rgba = flattenDoc(doc).data
+        else {
+          const l = requireLayer(doc, i.layerId!)
+          rgba = flattenDoc({ ...doc, selection: null, layers: [{ ...l, parentId: null, clip: false, visible: true, blend: 'normal', opacity: 1 }] }).data
+        }
+        mask = colorRangeMask(rgba, W, H, i.color!, i.fuzziness!, i.invert)
       } else {
         const l = requireLayer(doc, i.layerId!)
         const r = rasterizeLayer({ ...l, visible: true, opacity: 1 }, W, H)

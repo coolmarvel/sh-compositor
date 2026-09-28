@@ -18,6 +18,7 @@ export function ClassicTabs<T extends string>({ value, onChange, tabs }: { value
             height: value === t.key ? size.ctlMd : size.ctlSm,
             px: `${space.base + 2}px`,
             fontSize: font.md,
+            whiteSpace: 'nowrap',
             border: `1px solid ${chrome.frame}`,
             borderBottom: value === t.key ? `1px solid ${color.canvas}` : `1px solid ${chrome.frame}`,
             mb: '-1px',

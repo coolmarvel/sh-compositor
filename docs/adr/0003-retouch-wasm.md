@@ -16,13 +16,13 @@ Swift 대 TypeScript만의 문제가 아니라 메모리 접근량과 계산 방
 ## 결정
 
 - TypeScript 문서·이력·UI와 WebGL2 합성은 유지한다. CPU 픽셀 버퍼가 여전히 진실이다.
-- `native/retouch/kernel.rs`: 세 도구의 스칼라 f64 픽셀 커널. Rust 표준 라이브러리만 사용하며 외부 crate가 없다.
+- `native/kernels/kernel.rs`(v1.2.0 부터 필터 커널과 한 파일, 이전 `native/retouch/kernel.rs`): 세 도구의 스칼라 f64 픽셀 커널. Rust 표준 라이브러리만 사용하며 외부 crate가 없다.
 - `src/core/retouchWasm.ts`: 표본에 필요한 사각형만 복사하고, 재사용 WASM 메모리에 입력·출력·선택 가중치를 배치한다.
   계산 후 변경 사각형만 기존 JS 비트맵에 돌려준다. WASM 메모리를 문서나 실행취소에 보관하지 않는다.
 - `src/core/retouch.ts`: 영역 복사로 개선한 TypeScript 기준 구현. WASM 초기화/실행 실패 시 사용한다.
 - 렌더러는 작은 번들 WASM을 시작 시 비동기 로드한다. 인터넷·사용자 시스템의 Rust 설치가 필요 없다.
-- 바이너리 `src/renderer/src/assets/retouch.wasm`를 소스와 함께 보관한다. 커널 수정 시
-  `rustup target add wasm32-unknown-unknown` 후 `npm run build:retouch`로 재생성한다.
+- 바이너리 `src/renderer/src/assets/kernels.wasm`를 소스와 함께 보관한다. 커널 수정 시
+  `rustup target add wasm32-unknown-unknown` 후 `npm run build:wasm`(= `build:retouch`)로 재생성한다. 필터 커널 확장 기준은 ADR-0006.
   일반 JS 빌드·Windows 패키징에 Rust 설치를 강제하지 않는다.
 
 ## 대안과 한계

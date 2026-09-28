@@ -1,6 +1,7 @@
 import { snapshot, type RetouchSession } from './retouch'
 type Pt = { x: number; y: number }
-export type RetouchMode = 'blur' | 'smudge' | 'liquify'
+import type { RetouchMode } from './retouch'
+export type { RetouchMode }
 interface Kernel extends WebAssembly.Exports {
   memory: WebAssembly.Memory
   allocate: (bytes: number) => number

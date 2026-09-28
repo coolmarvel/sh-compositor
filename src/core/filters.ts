@@ -9,6 +9,8 @@
  * 흐림은 프리멀티플라이드로 계산해 투명 경계가 검게 번지지 않는다.
  */
 
+import { registerReference, NATIVE_MIN_PIXELS, type NativeKernels } from './kernels'
+
 export interface Filters {
   /** 가우시안 블러 반경(px, σ) 0 = 끔 */
   blur: number
@@ -162,8 +164,30 @@ function boxPass(src: Float32Array, dst: Float32Array, width: number, height: nu
   }
 }
 
+// ── Rust WASM 커널 (있으면) — 큰 그림의 가우시안·중간값은 여기로. 등록: 렌더러 editor/retouchWasm.ts · 서버 server/main.ts
+let native: NativeKernels | null = null
+export function setNativeKernels(k: NativeKernels | null): void {
+  native = k
+}
+export const hasNativeKernels = (): boolean => !!native
+function nativeFor(width: number, height: number): NativeKernels | null {
+  return native && width * height >= NATIVE_MIN_PIXELS ? native : null
+}
+
 /** 가우시안 근사 — 상자 3회 (σ 에 맞는 상자 폭은 √(12σ²/3+1)) */
 export function gaussianBlur(rgba: Uint8ClampedArray, width: number, height: number, sigma: number): Uint8ClampedArray {
+  if (sigma <= 0) return rgba
+  const k = nativeFor(width, height)
+  if (k) {
+    try {
+      return k.gaussianBlur(rgba, width, height, sigma)
+    } catch {
+      native = null // 커널이 깨지면 이후는 TS 로
+    }
+  }
+  return gaussianBlurTs(rgba, width, height, sigma)
+}
+export function gaussianBlurTs(rgba: Uint8ClampedArray, width: number, height: number, sigma: number): Uint8ClampedArray {
   if (sigma <= 0) return rgba
   const r = Math.max(1, Math.round((Math.sqrt((12 * sigma * sigma) / 3 + 1) - 1) / 2))
   let a: Float32Array = premultiply(rgba)
@@ -364,6 +388,18 @@ export function mosaicFilter(src: Uint8ClampedArray, w: number, h: number, cell:
  */
 export function medianFilter(src: Uint8ClampedArray, w: number, h: number, r: number): Uint8ClampedArray {
   if (r <= 0) return src
+  const k = nativeFor(w, h)
+  if (k) {
+    try {
+      return k.median(src, w, h, r)
+    } catch {
+      native = null
+    }
+  }
+  return medianFilterTs(src, w, h, r)
+}
+export function medianFilterTs(src: Uint8ClampedArray, w: number, h: number, r: number): Uint8ClampedArray {
+  if (r <= 0) return src
   const out = src.slice()
   const hist = new Int32Array(256)
   const half = ((2 * r + 1) * (2 * r + 1)) >> 1
@@ -397,3 +433,5 @@ export function medianFilter(src: Uint8ClampedArray, w: number, h: number, r: nu
     }
   return out
 }
+
+registerReference(gaussianBlurTs, medianFilterTs)

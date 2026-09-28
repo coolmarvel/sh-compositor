@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import { LayerEffects, DEFAULT_EFFECTS, DEFAULT_GLOW, hasEffects, ShadowEffect } from '@core/index'
+import { LayerEffects, DEFAULT_EFFECTS, DEFAULT_GLOW, DEFAULT_GRADIENT_OVERLAY, DEFAULT_BEVEL, hasEffects, ShadowEffect } from '@core/index'
 import { PaletteControl } from '../bar'
 import { ClassicDialog, GroupBox, Row, Check, SliderRow } from './parts'
 import { ClassicTabs } from './tabs'
@@ -9,7 +9,7 @@ import { ui } from '../../theme'
 
 const { color, font } = ui
 
-type Tab = 'stroke' | 'shadow' | 'glow' | 'overlay' | 'inner'
+type Tab = 'stroke' | 'shadow' | 'glow' | 'overlay' | 'gradient' | 'bevel' | 'inner'
 
 /**
  * 효과 대화상자 — Compositor `EffectsSheet`(외곽선·그림자·색 덮기·안쪽 그림자).
@@ -47,7 +47,7 @@ export default function EffectsDialog({ value, onChange, onClose }: { value: Lay
       title="레이어 효과"
       onClose={cancel}
       onEnter={onClose}
-      width={480}
+      width={600}
       actions={
         <>
           <Button variant="outlined" onClick={() => onChange(DEFAULT_EFFECTS)} disabled={!hasEffects(e)} sx={{ mr: 'auto' }}>
@@ -86,10 +86,12 @@ export default function EffectsDialog({ value, onChange, onClose }: { value: Lay
           { key: 'shadow', label: '그림자' },
           { key: 'glow', label: '외부 광선' },
           { key: 'overlay', label: '색 덮기' },
+          { key: 'gradient', label: '그라데이션 덮기' },
+          { key: 'bevel', label: '경사와 엠보스' },
           { key: 'inner', label: '안쪽 그림자' }
         ]}
       />
-      <Box sx={{ minHeight: 230 }}>
+      <Box sx={{ minHeight: 300 }}>
         {tab === 'stroke' && (
           <GroupBox title="외곽선">
             <Check label="사용" checked={e.stroke.enabled} onChange={(enabled) => onChange({ ...e, stroke: { ...e.stroke, enabled } })} />
@@ -143,6 +145,67 @@ export default function EffectsDialog({ value, onChange, onClose }: { value: Lay
             </Row>
           </GroupBox>
         )}
+        {tab === 'gradient' &&
+          (() => {
+            const g = e.gradientOverlay ?? DEFAULT_GRADIENT_OVERLAY
+            const set = (patch: Partial<typeof g>): void => onChange({ ...e, gradientOverlay: { ...g, ...patch } })
+            return (
+              <GroupBox title="그라데이션 덮기">
+                <Check label="사용 (모양 전체를 두 색 사이로 덮기)" checked={g.enabled} onChange={(enabled) => set({ enabled })} />
+                <Row label="모양">
+                  <Check label="원형 (끄면 선형)" checked={g.style === 'radial'} onChange={(v) => set({ style: v ? 'radial' : 'linear' })} />
+                  <Check label="뒤집기" checked={g.reverse} onChange={(reverse) => set({ reverse })} />
+                </Row>
+                <SliderRow label="각도" value={g.angle} min={-180} max={180} unit="°" onChange={(angle) => set({ angle })} />
+                <SliderRow label="크기" value={g.scale} min={10} max={150} unit="%" onChange={(scale) => set({ scale })} />
+                <SliderRow label="불투명도" value={Math.round(g.opacity * 100)} min={0} max={100} unit="%" onChange={(v) => set({ opacity: v / 100 })} />
+                <Row label="색">
+                  <PaletteControl title="시작 색" value={g.colors[0]} onChange={(c) => set({ colors: [c, g.colors[1]] })} />
+                  <PaletteControl title="끝 색" value={g.colors[1]} onChange={(c) => set({ colors: [g.colors[0], c] })} />
+                </Row>
+              </GroupBox>
+            )
+          })()}
+        {tab === 'bevel' &&
+          (() => {
+            const b = e.bevel ?? DEFAULT_BEVEL
+            const set = (patch: Partial<typeof b>): void => onChange({ ...e, bevel: { ...b, ...patch } })
+            return (
+              <GroupBox title="경사와 엠보스">
+                <Check label="사용" checked={b.enabled} onChange={(enabled) => set({ enabled })} />
+                <Row label="종류">
+                  {(
+                    [
+                      ['inner', '안쪽 경사'],
+                      ['outer', '바깥 경사'],
+                      ['emboss', '엠보스']
+                    ] as const
+                  ).map(([k, label]) => (
+                    <Box key={k} component="label" sx={{ display: 'flex', alignItems: 'center', gap: '4px', mr: '10px', fontSize: font.md }}>
+                      <input type="radio" name="bevel-style" checked={b.style === k} onChange={() => set({ style: k })} style={{ margin: 0, accentColor: color.accent }} />
+                      {label}
+                    </Box>
+                  ))}
+                </Row>
+                <SliderRow label="크기" value={b.size} min={1} max={100} unit="px" onChange={(size) => set({ size })} />
+                <SliderRow label="깊이" value={b.depth} min={1} max={500} unit="%" onChange={(depth) => set({ depth })} />
+                <SliderRow label="부드럽게" value={b.soften} min={0} max={20} unit="px" onChange={(soften) => set({ soften })} />
+                <SliderRow label="빛 각도" value={b.angle} min={-180} max={180} unit="°" onChange={(angle) => set({ angle })} />
+                <SliderRow label="고도" value={b.altitude} min={0} max={90} unit="°" onChange={(altitude) => set({ altitude })} />
+                <Row label="방향">
+                  <Check label="아래로 (끄면 위로)" checked={b.direction === 'down'} onChange={(v) => set({ direction: v ? 'down' : 'up' })} />
+                </Row>
+                <Row label="밝은 면">
+                  <PaletteControl title="밝은 면 색" value={b.highlightColor} onChange={(c) => set({ highlightColor: c })} />
+                  <SliderRow label="" value={Math.round(b.highlightOpacity * 100)} min={0} max={100} unit="%" onChange={(v) => set({ highlightOpacity: v / 100 })} />
+                </Row>
+                <Row label="어두운 면">
+                  <PaletteControl title="어두운 면 색" value={b.shadowColor} onChange={(c) => set({ shadowColor: c })} />
+                  <SliderRow label="" value={Math.round(b.shadowOpacity * 100)} min={0} max={100} unit="%" onChange={(v) => set({ shadowOpacity: v / 100 })} />
+                </Row>
+              </GroupBox>
+            )
+          })()}
         {tab === 'inner' && shadowRows('innerShadow', e.innerShadow)}
       </Box>
     </ClassicDialog>

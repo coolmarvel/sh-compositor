@@ -512,7 +512,8 @@ export function parseHex(hex: string): [number, number, number] {
 }
 
 /** 결정적 난수 (그레인) — 같은 입력이면 미리보기와 결과물이 같은 무늬가 된다 */
-function mulberry32(seed: number): () => number {
+/** 결정적 난수 (그레인·스팟 복구 근접 일치) — 같은 seed 면 같은 결과 */
+export function mulberry32(seed: number): () => number {
   let a = seed >>> 0
   return () => {
     a = (a + 0x6d2b79f5) >>> 0

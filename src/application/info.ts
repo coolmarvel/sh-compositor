@@ -17,6 +17,9 @@ export interface LayerInfo {
   height: number
   rotation: number
   hasMask: boolean
+  hasVectorMask: boolean
+  /** 켜진 레이어 효과 이름 (stroke·shadow·innerShadow·overlay·outerGlow·gradientOverlay·bevel) */
+  effects: string[]
   lock: { alpha: boolean; pixels: boolean; position: boolean }
 }
 
@@ -29,6 +32,8 @@ export interface DocSummary {
   /** 선택 영역 경계 (없으면 null) */
   selection: { x: number; y: number; w: number; h: number } | null
   guides: { vertical: number[]; horizontal: number[] }
+  /** 패스 목록 (id·이름·앵커 수) */
+  paths: { id: string; name: string; anchors: number }[]
 }
 
 export function describeDoc(doc: Doc): DocSummary {
@@ -39,7 +44,8 @@ export function describeDoc(doc: Doc): DocSummary {
     layerCount: doc.layers.length,
     activeLayerId: doc.activeId,
     selection: doc.selection?.bounds ?? null,
-    guides: { vertical: doc.guides?.v ?? [], horizontal: doc.guides?.h ?? [] }
+    guides: { vertical: doc.guides?.v ?? [], horizontal: doc.guides?.h ?? [] },
+    paths: (doc.paths ?? []).map((p) => ({ id: p.id, name: p.name, anchors: p.subpaths.reduce((a, s) => a + s.anchors.length, 0) }))
   }
 }
 
@@ -60,6 +66,10 @@ export function describeLayers(doc: Doc): LayerInfo[] {
     height: l.transform.height,
     rotation: l.transform.rotation,
     hasMask: !!l.mask,
+    hasVectorMask: !!l.vectorMask?.enabled,
+    effects: Object.entries(l.effects ?? {})
+      .filter(([, v]) => (v as { enabled?: boolean } | undefined)?.enabled)
+      .map(([k]) => k),
     lock: { alpha: !!l.lock?.alpha, pixels: !!l.lock?.pixels, position: !!l.lock?.position }
   }))
 }

@@ -39,9 +39,20 @@ export class WorkerThreadRunner implements JobRunner {
         })
       )
       // 메모리 초과(ERR_WORKER_OUT_OF_MEMORY)·예외 — 내부 문구는 숨긴다
-      worker.once('error', (e: Error & { code?: string }) =>
+      worker.once('error', (e: Error & { code?: string }) => {
+        // 원인은 서버 로그(stderr)에만 남긴다 — 클라이언트에는 내부 문구를 주지 않는다
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            msg: 'worker error',
+            task: task.type === 'command' ? task.name : task.format,
+            code: e.code,
+            error: e.message,
+            stack: e.stack?.split('\n').slice(0, 6).join(' | ')
+          })
+        )
         done(() => reject(e.code === 'ERR_WORKER_OUT_OF_MEMORY' ? new CommandError('RESOURCE_LIMIT', '작업이 메모리 한도를 넘었습니다.') : new CommandError('INTERNAL', '작업을 처리하지 못했습니다.')))
-      )
+      })
       worker.once('exit', (code) => done(() => reject(new CommandError('INTERNAL', `작업 스레드가 끝났습니다 (${code}).`))))
       worker.postMessage(task)
     })

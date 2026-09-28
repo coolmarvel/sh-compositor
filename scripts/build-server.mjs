@@ -3,8 +3,9 @@
  * MCP SDK·zod·fflate 까지 한 파일로 묶는다 (배포 시 node_modules 불필요). Electron 인스톨러에는 들어가지 않는다.
  */
 import { build } from 'esbuild'
-import { readFileSync } from 'node:fs'
+import { readFileSync, copyFileSync } from 'node:fs'
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+copyFileSync(new URL('../src/renderer/src/assets/kernels.wasm', import.meta.url), new URL('../out/server/kernels.wasm', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))
 const result = await build({
   metafile: true,
   entryPoints: { index: 'src/server/main.ts', taskWorker: 'src/server/taskWorker.ts' },

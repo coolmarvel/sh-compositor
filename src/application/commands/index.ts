@@ -16,10 +16,11 @@ import {
   layerMaskCommand
 } from './layers'
 import { selectionSetCommand, selectionModifyCommand } from './selection'
-import { fillCommand, eraseCommand, strokeSelectionCommand, contentFillCommand, brushStrokeCommand, gradientCommand, retouchCommand, cloneCommand, healCommand } from './pixels'
+import { fillCommand, eraseCommand, strokeSelectionCommand, contentFillCommand, brushStrokeCommand, gradientCommand, retouchCommand, toneCommand, cloneCommand, healCommand } from './pixels'
 import { adjustApplyCommand, adjustQuickCommand, adjustMoreCommand } from './adjust'
 import { filterCommand } from './filter'
 import { shapeAddCommand } from './shape'
+import { pathSetCommand, pathDeleteCommand, pathToSelectionCommand, pathFillCommand, pathStrokeCommand, layerVectorMaskCommand } from './path'
 
 export * from './types'
 export * from './image'
@@ -29,6 +30,7 @@ export * from './pixels'
 export * from './adjust'
 export * from './filter'
 export * from './shape'
+export * from './path'
 
 const LIST: DocCommand<unknown>[] = [
   resizeCommand,
@@ -60,13 +62,20 @@ const LIST: DocCommand<unknown>[] = [
   brushStrokeCommand,
   gradientCommand,
   retouchCommand,
+  toneCommand,
   cloneCommand,
   healCommand,
   adjustApplyCommand,
   adjustQuickCommand,
   adjustMoreCommand,
   filterCommand,
-  shapeAddCommand
+  shapeAddCommand,
+  pathSetCommand,
+  pathDeleteCommand,
+  pathToSelectionCommand,
+  pathFillCommand,
+  pathStrokeCommand,
+  layerVectorMaskCommand
 ] as DocCommand<unknown>[]
 
 export const COMMANDS: Record<string, DocCommand<unknown>> = Object.fromEntries(LIST.map((c) => [c.name, c]))

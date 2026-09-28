@@ -12,7 +12,7 @@ import { isIdentityPlacement, identityTransform } from './transform'
 import { rasterizeBitmap } from './render'
 import { cropBitmap } from './bitmap'
 import { applyAdjustments, hasAdjust, type Adjustments } from '../adjust'
-import { applyFilters, hasFilters, type Filters } from '../filters'
+import { applyFilters, hasFilters, filterMargin, type Filters } from '../filters'
 import type { Doc, Bitmap, Layer } from './types'
 
 export interface Rect {
@@ -173,6 +173,27 @@ export function eraseSelection(doc: Doc, id: string): Doc {
 
 /** 보정·필터를 레이어에 직접 (선택 영역 한정) — Compositor 의 Image 메뉴 보정·Filter 메뉴 */
 export function adjustLayer(doc: Doc, id: string, a: Adjustments | null, f: Filters | null, seed = 7): Doc {
+  const b = doc.selection?.bounds
+  // 선택 영역이 작으면 그 주변만 계산한다 (큰 사진에서 작은 부분 보정·필터가 전체를 훑지 않게). 흐림은 여백만큼 더.
+  if (b && b.w * b.h < doc.width * doc.height * 0.6) {
+    const m = f && hasFilters(f) ? filterMargin(f) + Math.ceil((f.median ?? 0) + (f.sharpenRadius ?? 0) * 3 + (f.highPass ?? 0) * 3 + (f.mosaic ?? 0)) : 0
+    const region: Rect = { x: b.x - m, y: b.y - m, w: b.w + 2 * m, h: b.h + 2 * m }
+    return editPixels(doc, id, 'layer', undefined, (d, w, h, ox, oy) => {
+      const x0 = Math.max(0, Math.floor(region.x - ox))
+      const y0 = Math.max(0, Math.floor(region.y - oy))
+      const x1 = Math.min(w, Math.ceil(region.x + region.w - ox))
+      const y1 = Math.min(h, Math.ceil(region.y + region.h - oy))
+      if (x1 <= x0 || y1 <= y0) return
+      const rw = x1 - x0
+      const rh = y1 - y0
+      const sub = new Uint8ClampedArray(rw * rh * 4)
+      for (let y = 0; y < rh; y++) sub.set(d.subarray(((y0 + y) * w + x0) * 4, ((y0 + y) * w + x1) * 4), y * rw * 4)
+      if (a && hasAdjust(a)) applyAdjustments(sub, a, seed)
+      let out: Uint8ClampedArray = sub
+      if (f && hasFilters(f)) out = applyFilters(sub, rw, rh, f, seed, 'clamp')
+      for (let y = 0; y < rh; y++) d.set(out.subarray(y * rw * 4, (y + 1) * rw * 4), ((y0 + y) * w + x0) * 4)
+    })
+  }
   return editPixels(doc, id, 'layer', undefined, (d, w, h) => {
     if (a && hasAdjust(a)) applyAdjustments(d, a, seed)
     if (f && hasFilters(f)) d.set(applyFilters(d, w, h, f, seed, 'clamp'))

@@ -10,7 +10,21 @@
  *  - 문서가 GPU 최대 텍스처보다 크면 합성 해상도를 줄인다(화면용). 내보내기·병합은 CPU 합성기가 원본 해상도로.
  */
 import { QUAD_VS, LAYER_FS, OVER_FS, COPY_FS, ADJUST_FS, PRESENT_FS } from './shaders'
-import { BLEND_MODES, layerMatrix, renderEffects, hasEffects, adjustmentTables, transformBounds, hasFilters, flattenDoc, type Bitmap, type Doc, type Layer, type LayerTransform } from '@core/index'
+import {
+  BLEND_MODES,
+  layerMatrix,
+  renderEffects,
+  hasEffects,
+  adjustmentTables,
+  transformBounds,
+  hasFilters,
+  flattenDoc,
+  effectiveMask,
+  type Bitmap,
+  type Doc,
+  type Layer,
+  type LayerTransform
+} from '@core/index'
 
 /** 두 레이어 객체가 화면상 같은가 — 필드가 모두 같은 객체(또는 내용이 같은 비트맵 사본)면 다시 그리지 않는다 */
 function sameLayer(a: Layer, b: Layer, same: WeakMap<Bitmap, Bitmap>): boolean {
@@ -375,9 +389,10 @@ export class GLRenderer {
   }
 
   /** 마스크·효과가 있으면 CPU 로 미리 입힌 비트맵과 넓어진 변형 (Compositor LayerEffectsRenderer.cached) */
-  private drawable(l: Layer, b: Bitmap): { bitmap: Bitmap; transform: LayerTransform; maskInShader: boolean } {
-    if (!l.effects || !hasEffects(l.effects)) return { bitmap: b, transform: l.transform, maskInShader: !!l.mask?.enabled }
-    const mask = l.mask?.enabled ? l.mask.bitmap : null
+  private drawable(l: Layer, b: Bitmap): { bitmap: Bitmap; transform: LayerTransform; maskInShader: boolean; mask: Bitmap | null } {
+    const em = effectiveMask(l, this.doc!.width, this.doc!.height)
+    if (!l.effects || !hasEffects(l.effects)) return { bitmap: b, transform: l.transform, maskInShader: !!em, mask: em?.bitmap ?? null }
+    const mask = em?.bitmap ?? null
     let c = this.effectsCache.get(b)
     if (!c || c.key !== l.effects || c.mask !== mask) {
       let src = b.data
@@ -396,7 +411,7 @@ export class GLRenderer {
     const cy = t.y + t.height / 2
     const w = c.bitmap.width * kx
     const h = c.bitmap.height * ky
-    return { bitmap: c.bitmap, transform: { ...t, x: cx - w / 2, y: cy - h / 2, width: w, height: h }, maskInShader: false }
+    return { bitmap: c.bitmap, transform: { ...t, x: cx - w / 2, y: cy - h / 2, width: w, height: h }, maskInShader: false, mask: null }
   }
 
   /**
@@ -580,6 +595,22 @@ export class GLRenderer {
     gl.uniform3f(u.uColorizeHSL, ...tb.colorizeHSL)
     gl.uniform1i(u.uHasGrad, tb.grad ? 1 : 0)
     gl.uniform1f(u.uGrain, tb.grain)
+    const more = adj.more
+    const kinds = { blackWhite: 1, colorBalance: 2, vibrance: 3, posterize: 4, threshold: 5 } as const
+    gl.uniform1i(u.uMore, more ? kinds[more.kind] : 0)
+    if (more) {
+      const bw = more.bw
+      gl.uniform3f(u.uBwA, bw.reds / 100, bw.yellows / 100, bw.greens / 100)
+      gl.uniform3f(u.uBwB, bw.cyans / 100, bw.blues / 100, bw.magentas / 100)
+      const cb = more.cb
+      gl.uniform3f(u.uCbShadow, cb.shadows[0] / 100, cb.shadows[1] / 100, cb.shadows[2] / 100)
+      gl.uniform3f(u.uCbMid, cb.midtones[0] / 100, cb.midtones[1] / 100, cb.midtones[2] / 100)
+      gl.uniform3f(u.uCbHigh, cb.highlights[0] / 100, cb.highlights[1] / 100, cb.highlights[2] / 100)
+      gl.uniform1i(u.uCbLum, cb.preserveLuminosity ? 1 : 0)
+      gl.uniform2f(u.uVib, more.vibrance / 100, more.saturation / 100)
+      gl.uniform1f(u.uLevels, Math.max(2, Math.min(255, Math.round(more.levels))))
+      gl.uniform1f(u.uThreshold, more.threshold)
+    }
     gl.uniform1f(u.uOpacity, l.opacity)
     gl.uniform2f(u.uTarget, dst.w, dst.h)
     this.drawQuad()
@@ -615,8 +646,9 @@ export class GLRenderer {
       }
       if (l.clip && !clip) continue
       if (l.kind === 'adjustment' && l.adjustment) {
-        const maskTex = l.mask?.enabled ? this.texture(l.mask.bitmap) : null
-        if (l.mask) keep.add(l.mask.bitmap)
+        const em = effectiveMask(l, W, H)
+        const maskTex = em ? this.texture(em.bitmap) : null
+        if (em) keep.add(em.bitmap)
         this.adjustInPlace(cur, l, clip, maskTex)
         continue
       }
@@ -631,9 +663,10 @@ export class GLRenderer {
         this.compositeChildren(l.id, groupRes, keep)
         tex = groupRes.tex
         mats = this.fullMats()
-        if (l.mask?.enabled) {
-          maskTex = this.texture(l.mask.bitmap)
-          keep.add(l.mask.bitmap)
+        const em = effectiveMask(l, W, H)
+        if (em) {
+          maskTex = this.texture(em.bitmap)
+          keep.add(em.bitmap)
         }
       } else {
         const b = this.bitmapOf(l)
@@ -643,9 +676,9 @@ export class GLRenderer {
         keep.add(dr.bitmap)
         tex = this.texture(dr.bitmap)
         mats = this.layerMats(dr.transform, dr.bitmap.width, dr.bitmap.height, W, H)
-        if (dr.maskInShader && l.mask) {
-          maskTex = this.texture(l.mask.bitmap)
-          keep.add(l.mask.bitmap)
+        if (dr.maskInShader && dr.mask) {
+          maskTex = this.texture(dr.mask)
+          keep.add(dr.mask)
         }
       }
       this.drawLayerInto(cur, tex, mats, { opacity: l.opacity, blend: BLEND_INDEX[l.blend] ?? 0, mask: maskTex, clip })

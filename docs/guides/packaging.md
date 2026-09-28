@@ -1,7 +1,7 @@
 ---
 title: 배포 패키징 가이드
 created: 2026-09-21
-updated: 2026-09-22
+updated: 2026-09-23
 domain: packaging
 ---
 
@@ -45,10 +45,10 @@ main·preload 에서 npm 패키지를 import 하게 되면 이 규칙을 먼저 
 
 내부 이름 ASCII(`SH Compositor` 는 이미 ASCII), ad-hoc 서명 — 맥에서 첫 빌드 시 파일 변환기 가이드의 체크리스트대로.
 
-## 리터칭 WASM (v1.0.3)
+## Rust WASM 커널 (v1.0.3 리터칭, v1.2.0 필터)
 
-`src/renderer/src/assets/retouch.wasm`은 Vite가 해시 이름의 에셋으로 묶어 app.asar에 넣는다.
+`src/renderer/src/assets/kernels.wasm`은 Vite가 해시 이름의 에셋으로 묶어 app.asar에 넣고, 서버 번들은 `scripts/build-server.mjs`가 `out/server/kernels.wasm`으로 복사한다.
 사용자의 PC에는 Rust·외부 DLL·네트워크가 필요 없다.
-`native/retouch/kernel.rs` 수정 시 개발 환경에서 Rust의 `wasm32-unknown-unknown` 타깃을 설치하고
-`npm run build:retouch`를 실행한다. 소스와 생성 WASM을 함께 관리하고 차등 테스트를 통과시킨다.
-일반 `npm run build`는 저장된 WASM을 사용한다(ADR-0003).
+`native/kernels/kernel.rs` 수정 시 개발 환경에서 Rust의 `wasm32-unknown-unknown` 타깃을 설치하고
+`npm run build:wasm`을 실행한다. 소스와 생성 WASM을 함께 관리하고 차등 테스트(`test/retouch.test.ts`·`test/kernels.test.ts`)를 통과시킨다.
+일반 `npm run build`는 저장된 WASM을 사용한다(ADR-0003·ADR-0006).

@@ -60,7 +60,7 @@ node out/server/index.mjs --stdio                      # 로컬 MCP (stdio, 사�
 
 | 경로 | 설명 |
 |---|---|
-| `POST /v1/assets` | PNG·PSD·.shcomp 원문 (`Content-Type: image/png`, 선택 `X-Filename`) → 201 AssetInfo. 형식은 내용으로 판정한다 (헤더는 보지 않는다) |
+| `POST /v1/assets` | PNG·JPEG·PSD·.shcomp 원문 (`Content-Type` 은 `image/png`·`image/jpeg`·`image/vnd.adobe.photoshop`·`application/zip`·`application/octet-stream` 중 하나, 선택 `X-Filename`) → 201 AssetInfo. 형식은 내용으로 판정한다 (헤더 값은 허용 목록 검사만) |
 | `GET /v1/assets/:id` | 자신의 업로드·결과 파일. 남의 것은 404 |
 | `POST/GET/DELETE /mcp` | MCP Streamable HTTP (stateless, JSON 응답) |
 | `GET /healthz` | `{ ok, jobsRunning, jobsQueued, jobsKept, workerThreads }` (인증 없음, 내용 없음) |
@@ -69,28 +69,29 @@ node out/server/index.mjs --stdio                      # 로컬 MCP (stdio, 사�
 오류 본문은 `{ error: { code, message, details? } }`. 상태 코드: 400 INVALID_INPUT · 401 토큰 · 403 FORBIDDEN/Origin · 404 NOT_FOUND · 409 REVISION_CONFLICT/CANCELLED · 413 RESOURCE_LIMIT · 415 UNSUPPORTED_CAPABILITY · 504 TIMEOUT.
 로그(stderr JSON 한 줄): 요청 ID·경로·상태·시간·owner·도구·문서/작업 ID·오류 코드. 토큰·이미지·도구 인자는 남기지 않는다.
 
-## MCP 도구 (51)
+## MCP 도구 (58)
 
 목록·설명의 SSOT 는 `src/application/catalog.ts` (서버 등록과 사용 설명서 F1 ▸ MCP 탭이 같은 표를 쓴다). 매개변수 스키마는 `src/server/mcp.ts`.
 
 | 묶음 | 도구 (접두사 `compositor_`) |
 |---|---|
-| 문서·파일 | capabilities · document_{create,import,list,get,rename,delete,undo,redo,guides} · asset_upload_base64 · export(png·shcomp·psd) · histogram |
+| 문서·파일 | capabilities · document_{create,import,list,get,rename,delete,undo,redo,guides} · asset_upload_base64 · export(png·jpeg·shcomp·psd) · histogram |
 | 이미지·캔버스 | image_{resize,crop,canvas_size,rotate,flip,trim,flatten} |
-| 레이어·마스크 | layer_{list,add,update,delete,duplicate,reorder,group,ungroup,merge,mask,set_active,flip,via_copy} |
-| 선택 | selection_{set,modify} |
-| 칠하기·고치기 | pixels_{fill,erase,stroke_selection,content_fill} · brush_stroke · gradient_apply · retouch_stroke · clone_stroke · heal_stroke · shape_add |
+| 레이어·마스크 | layer_{list,add,update,delete,duplicate,reorder,group,ungroup,merge,mask,set_active,flip,via_copy} (add 는 조정 레이어 10종, update 는 `more`·효과 7종) |
+| 패스 (v1.2) | path_{set,delete,to_selection,fill,stroke} · layer_vector_mask |
+| 선택 | selection_{set,modify} (set 에 `colorRange`) |
+| 칠하기·고치기 | pixels_{fill,erase,stroke_selection,content_fill} · brush_stroke(`tip`·`seed`·`target: selection` = 퀵 마스크) · gradient_apply · retouch_stroke · tone_stroke(v1.2 닷지·번·스펀지) · clone_stroke · heal_stroke · shape_add |
 | 색 보정·필터 | adjust_{apply,quick,more} · filter_apply |
 | 작업 | job_{get,cancel} |
 
-서버에서 할 수 없는 것 (`UNSUPPORTED_ON_SERVER`): 문자 레이어(글꼴·캔버스 없음, PSD 의 문자는 픽셀로), AI 배경 제거·피사체·개체 선택(브라우저 전용 모델), JPEG·WebP·HEIC·TIFF 코덱.
+서버에서 할 수 없는 것 (`UNSUPPORTED_ON_SERVER`): 문자 레이어(글꼴·캔버스 없음, PSD 의 문자는 픽셀로), AI 배경 제거·피사체·개체 선택(브라우저 전용 모델), WebP·HEIC·TIFF 코덱. JPEG 은 v1.2.0 부터 `jpeg-js`(순수 JS)로 가져오기·내보내기(흰 배경, 품질 90) 된다.
 도형은 `core/shape.ts` 순수 래스터라이저를 편집기·서버가 같이 쓴다 (v1.1.1 부터 편집기도 OffscreenCanvas 대신 이것).
 
 - 변경은 모두 `docId`·`expectedRevision`·`operationId`. 같은 operationId + 같은 입력 = 같은 작업·결과(재실행 없음), 다른 입력 = `INVALID_INPUT`(`details.reason = OPERATION_ID_REUSED`).
 - 변경 도구는 작업을 시작하고 `waitMs`(기본 10초, 최대 30초)만큼 기다린다. 못 끝나면 작업 상태를 돌려주고 `compositor_job_get`으로 이어 본다.
 - 커밋 직전에 revision·취소·기한을 다시 검사한다. 앞선 편집이 있으면 `REVISION_CONFLICT`, 기한을 넘기면 타이머가 늦게 깨어나도 `TIMEOUT`으로 버린다.
 - 획(붓·리터칭·복제·복구)은 점 배열 하나가 한 요청·한 실행취소 단계다. 자국마다 요청하지 않는다.
-- 이미지는 도구 인자로 주고받지 않는다: HTTP 업로드(PNG·PSD·.shcomp, 내용으로 판정) → assetId, 결과는 `resource_link` + `downloadUrl`(같은 Bearer 토큰). stdio 만 작은 base64 업로드를 쓴다.
+- 이미지는 도구 인자로 주고받지 않는다: HTTP 업로드(PNG·JPEG·PSD·.shcomp, 내용으로 판정) → assetId, 결과는 `resource_link` + `downloadUrl`(같은 Bearer 토큰). stdio 만 작은 base64 업로드를 쓴다.
 - 스키마(zod → JSON Schema)는 안내용이다. application 이 다시 검증하고 스키마 밖 키도 거절한다. 호출자는 인증 정보에서만 정한다.
 
 Claude Code 연결 예:
@@ -100,7 +101,8 @@ claude mcp add --transport http sh-compositor http://127.0.0.1:8787/mcp --header
 claude mcp add sh-compositor -- node /절대경로/out/server/index.mjs --stdio
 ```
 
-확인: `npm run build:server && npm run e2e:mcp` (공식 SDK 클라이언트로 HTTP·stdio 23건 — M16~M23 이 도구 51개를 모두 호출하고 결과 PNG 픽셀을 검사한다).
+확인: `npm run build:server && npm run e2e:mcp` (공식 SDK 클라이언트로 HTTP·stdio 25건 — M16~M23 이 도구 58개를 모두 호출하고 결과 PNG 픽셀을 검사한다. M19b·M19c 가 v1.2 도구·JPEG 왕복).
+작업 스레드에서 모르는 예외가 나면 서버 로그에 `task failed`(원인·스택 앞 6줄)를 남기고 클라이언트에는 `INTERNAL` 만 준다.
 실제 AI 클라이언트: 2026-09-23 Claude Code(`claude -p --mcp-config`, Sonnet)가 HTTP 로 붙어 "문서 만들기 → 도형 2개 → 타원 레이어만 블러 → PNG" 를 도구 5회·7턴으로 끝냈고 결과 픽셀이 맞았다. ChatGPT 등 다른 클라이언트는 아직 사람이 확인하지 않았다.
 
 ## 관련 코드
@@ -108,4 +110,4 @@ claude mcp add sh-compositor -- node /절대경로/out/server/index.mjs --stdio
 - 명령·서비스: `src/application/{commands,service,repository,assets,jobs,codecs,errors,validate,info}.ts`
 - 편집기 연결: `src/renderer/src/editor/commandBridge.ts`, `store.ts` (`revision`·`commitTo`·`tabSignal`)
 - 웹: `src/renderer/src/platform/{index,web,idb}.ts`, `vite.web.config.ts`, `scripts/web-assets.cjs`, `test/e2e/web.mjs`
-- 서버: `src/server/{main,http,mcp,auth,config,workerRunner,taskWorker}.ts`, `scripts/build-server.mjs`, `test/e2e/mcp.mjs`, `test/server.test.ts`
+- 서버: `src/server/{main,http,mcp,auth,config,workerRunner,taskWorker,kernels}.ts`, `scripts/build-server.mjs`, `test/e2e/mcp.mjs`, `test/server.test.ts`, 코덱 `test/codecs.test.ts`

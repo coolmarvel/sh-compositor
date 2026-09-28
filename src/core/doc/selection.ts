@@ -317,3 +317,21 @@ export function smoothSelection(sel: Selection, radius: number): Selection | nul
   for (let i = 0; i < m.length; i++) m[i] = Math.max(0, Math.min(255, Math.round((blurred.mask[i] - 127.5) * 4 + 127.5)))
   return makeSelection(sel.width, sel.height, m)
 }
+
+/**
+ * 색상 범위 — 기준 색과의 RGB 거리로 덮임 (포토샵 Color Range). fuzziness 0~200: 거리(0~255 정규화)가 fuzz/2 이내면 100%, fuzz 까지 점점 0.
+ * 투명 픽셀은 알파만큼만.
+ */
+export function colorRangeMask(rgba: Uint8ClampedArray, width: number, height: number, color: [number, number, number], fuzziness: number, invert = false): Uint8Array {
+  const m = new Uint8Array(width * height)
+  const f = Math.max(1, Math.min(200, fuzziness))
+  const inner = f / 2
+  for (let i = 0; i < m.length; i++) {
+    const o = i * 4
+    const d = Math.sqrt(((rgba[o] - color[0]) ** 2 + (rgba[o + 1] - color[1]) ** 2 + (rgba[o + 2] - color[2]) ** 2) / 3)
+    let w = d <= inner ? 1 : d >= f ? 0 : 1 - (d - inner) / (f - inner)
+    if (invert) w = 1 - w
+    m[i] = Math.round(w * (rgba[o + 3] / 255) * 255)
+  }
+  return m
+}

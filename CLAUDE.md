@@ -90,7 +90,7 @@ npm run typecheck    # 타입 검사 (node + web)
 npm test             # core·application·서버 설정 순수 로직 테스트 (node:test)
 npm run build        # electron-vite build + 난독화 (scripts/obfuscate.cjs)
 npm run format       # Prettier (printWidth 200)
-npm run e2e [-- A B …]  # 실제 앱 E2E 120건 — Xvfb 가상 화면에서 (사용자 화면에 창이 뜨지 않음). build 후
+npm run e2e [-- A B …]  # 실제 앱 E2E 129건 — Xvfb 가상 화면에서 (사용자 화면에 창이 뜨지 않음). build 후
 npm run build:web      # 웹 로컬 편집기 → out/web (dev:web 5190 · preview:web 5191)
 npm run e2e:web        # 웹 E2E 15건 (헤드리스 Chromium, build:web 후)
 npm run build:server   # headless 서버·MCP → out/server/index.mjs (SHC_TOKENS=… npm run server · --stdio)
@@ -107,7 +107,9 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
   `history.ts`(스냅샷 실행취소), `selection.ts`(마스크 선택·마법봉), `brush.ts`, `project.ts`(.shcomp = .comp v7 zip), `transform.ts`, `blend.ts`
 - 보정·필터·효과·원근·내용 인식·매트·한도: `src/core/*.ts` (파일 변환기에서 이식, 테스트 `test/compositor*.test.ts`)
 - **GPU 거울**: `src/renderer/src/gl/GLRenderer.ts`·`shaders.ts` — CPU 합성 규칙을 그대로 따른다 (`docs/guides/rendering.md`)
-- 편집기 상태: `editor/store.ts`(탭·이력·도구 설정·대화상자, 탭별 `revision`·`commitTo`·`tabSignal`), 동작: `editor/actions.ts`(메뉴·단축키 공용), 픽셀 편집 규약: `core/doc/pixels.ts`(`editor/pixels.ts` 는 재수출)
+- v1.2 추가: 닷지·번·스펀지 `core/tone.ts` + `tools/paint.ts`(Kind 'tone', 퀵 마스크 target 'selection') · 패스·벡터 마스크 `core/doc/path.ts`(`effectiveMask` = CPU·GL·PSD 공용) + `tools/pen.ts` + `panels/PathsPanel.tsx` + `application/commands/path.ts` ·
+  글자별 서식 `core/doc/textruns.ts` + `editor/text.ts` · 브러시 팁·질감 `core/doc/brush.ts` + `dialogs/BrushDialog.tsx` · 조정 레이어 5종 `adjustment.more`(`core/adjust2.ts`, GL `uMore*`) · 효과 `core/effects.ts gradientOver/bevelOver` · Rust 커널 `core/kernels.ts` · 서버 JPEG `application/codecs.ts`(jpeg-js)
+- 편집기 상태: `editor/store.ts`(탭·이력·도구 설정·대화상자·`quickMask`·`activePathId`, 탭별 `revision`·`commitTo`·`tabSignal`), 동작: `editor/actions.ts`(메뉴·단축키 공용), 픽셀 편집 규약: `core/doc/pixels.ts`(`editor/pixels.ts` 는 재수출)
   (`docs/guides/pixels.md`), 입출력: `editor/io.ts`, 배경 제거: `editor/bgremove.ts`(동적 import), 캔버스 명령 등록소: `editor/commands.ts`
 - **명령 계층(UI 독립)**: `src/application/` — `commands/{image,layers,selection,pixels,adjust,filter,shape}.ts`(36 명령, parse/run) · `catalog.ts`(MCP 도구 51개 설명 = 사용 설명서 MCP 탭 SSOT) · `service.ts`(owner·revision·operationId·job·한도) · `codecs.ts`(PNG·PSD·shcomp) · `repository/assets/jobs/errors`. 편집기 연결 `editor/commandBridge.ts` (ADR-0005)
 - **웹·서버**: `renderer/src/platform/{index,web,idb}.ts`(window.api 브라우저 구현) · `vite.web.config.ts` · `src/server/{main,http,mcp,auth,config,workerRunner,taskWorker}.ts` (가이드 `docs/guides/web-mcp.md`)
@@ -133,6 +135,10 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 - 미리보기는 반드시 `editor.setPreview()`(만든 문서에 묶임) — `set({preview})` 로 넣으면 문서가 바뀐 뒤에도 옛 미리보기가 그려진다 (배경 제거 미반영 사고).
 - 오래 도는 계산(ONNX·PNG 압축)은 Web Worker — 화면 스레드에서 돌리면 진행 막대까지 멈춘다. 워커는 동적 import 를 쓰면 vite `worker.format: 'es'` 필요.
 - 캔버스 포커스는 `focus({ preventScroll: true })` — 아니면 화면 전체가 스크롤돼 클릭 위치가 어긋난다.
+- 문자 편집 textarea 의 `onBlur` 는 초점이 도구 옵션 줄(`aria-label="도구 옵션"`)·MUI 팝오버로 갔을 때 커밋하지 않는다 — 아니면 굵게·글꼴 버튼을 누르는 순간 편집이 끝나 글자별 서식을 줄 수 없다 (v1.2.0 E2E O8).
+- worker_threads 로 돌려주는 바이트는 독립 `Uint8Array` 여야 한다 — Node `Buffer`(jpeg-js 결과)는 풀 메모리를 공유해 transfer 가 `DataCloneError` 로 죽는다 (v1.2.0 MCP E2E 사고).
+- 대화상자 안 캔버스에 `useRef` + `useEffect` 로 그리면 안 그려진다 — MUI Dialog(Portal)는 첫 커밋 뒤에 내용을 붙여 첫 effect 에서 ref 가 null. 콜백 ref 를 state 로 받아 effect deps 에 넣는다 (`BrushDialog`). `Box component="canvas"` 의 `width/height` 는 CSS 가 되니 픽셀 크기는 일반 `<canvas>` 속성으로.
+- **Q 는 퀵 마스크**(v1.2.0). 마스크 추가는 메뉴·레이어 패널 버튼만 — E2E 에서 `press('q')` 로 마스크를 만들지 않는다.
 - UI 문구: "—"·"A = B" 금지, 한 문장 한 줄(대화상자 폭 맞춤), 바꾸면 `npm run audit` 으로 확인.
 - E2E·perf 는 `npm run e2e` (Xvfb) — 사용자 화면에서 창이 깜빡이지 않게.
 - 보기 맞춤은 `editor/view.ts` + `store.withView`(문서 크기 변화 시 동기) — rAF 그리기에만 의존하면 창이 뒤에 있을 때 클릭 좌표가 어긋난다.
@@ -169,9 +175,10 @@ npm run dist:win     # → release/SH-Compositor-Setup-<version>.exe (WSL 에서
 | MCP (`.mcp.json`) | `context7`(라이브러리 문서) · `playwright`(브라우저 QA — 실제 앱 QA 는 `test/e2e/*.mjs` 의 `_electron`) |
 | Skills | 스택별 스킬 도입 시 skills-lock.json + scripts/install-skills.sh 방식으로 락 (현재 없음) |
 
-## 리터칭 가속 (v1.0.3)
+## Rust WASM 커널 (v1.0.3 리터칭, v1.2.0 필터)
 
-- `native/retouch/kernel.rs` → `npm run build:retouch` → `src/renderer/src/assets/retouch.wasm` (소스와 함께 보관).
+- `native/kernels/kernel.rs`(리터칭 dab + 가우시안 블러·중간값) → `npm run build:wasm` → `src/renderer/src/assets/kernels.wasm` (소스와 함께 보관). 필터 커널 등록은 `core/filters.ts setNativeKernels`, 서버는 `server/kernels.ts loadKernels`.
+- **채택 기준 = `node --import tsx test/kernel-bench.ts` 중앙값 1.5배 이상** (ADR-0006). 닷지·번·스펀지는 벤치에서 느려 TS 그대로다 — 커널을 늘릴 때 다시 재지 않고 넣지 않는다.
 - `core/retouchWasm.ts` 영역 전달·재사용 메모리, `core/retouch.ts` TS 기준/폴백. ADR-0003 참조.
 - 커널 수정 시 WASM 재생성 후 `test/retouch.test.ts` 차등 비교 및 E2E F5 확인. 전체 이미지 복사를 자국 루프에 다시 넣지 않는다.
 

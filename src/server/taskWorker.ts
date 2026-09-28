@@ -4,7 +4,10 @@
  */
 import { parentPort } from 'node:worker_threads'
 import { executeTask, stripShared, type Task } from '../application/jobs'
-import { toCommandError } from '../application/errors'
+import { toCommandError, CommandError } from '../application/errors'
+import { loadKernels } from './kernels'
+
+loadKernels()
 
 parentPort!.once('message', (task: Task) => {
   try {
@@ -19,6 +22,17 @@ parentPort!.once('message', (task: Task) => {
     parentPort!.postMessage({ ok: true, result, keptSelection }, transfer)
   } catch (error) {
     const e = toCommandError(error)
+    // 모르는 예외의 원인은 서버 로그(stderr)에만 — 클라이언트에는 내부 문구를 주지 않는다
+    if (e.code === 'INTERNAL' && !(error instanceof CommandError))
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          msg: 'task failed',
+          task: task.type === 'command' ? task.name : task.format,
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack?.split('\n').slice(0, 6).join(' | ') : undefined
+        })
+      )
     parentPort!.postMessage({ ok: false, error: { code: e.code, message: e.message, details: e.details } })
   }
 })

@@ -142,3 +142,22 @@ export function pushDab(s: RetouchSession, from: Pt, to: Pt): { x: number; y: nu
     }
   return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
 }
+
+/** Rust dab 이 있으면 쓴다 (편집기·서버가 등록). 없거나 실패하면 TS 기준 */
+export type RetouchMode = 'blur' | 'smudge' | 'liquify'
+type NativeDab = (s: RetouchSession, mode: RetouchMode, from: Pt, to: Pt) => { x: number; y: number; w: number; h: number } | null | undefined
+let nativeDab: NativeDab | null = null
+export function setNativeRetouch(fn: NativeDab | null): void {
+  nativeDab = fn
+}
+export function retouchDab(s: RetouchSession, mode: RetouchMode, from: Pt, to: Pt): { x: number; y: number; w: number; h: number } | null {
+  if (nativeDab) {
+    try {
+      const r = nativeDab(s, mode, from, to)
+      if (r !== undefined) return r
+    } catch {
+      nativeDab = null
+    }
+  }
+  return mode === 'blur' ? blurDab(s, to.x, to.y) : mode === 'smudge' ? smudgeDab(s, from, to) : pushDab(s, from, to)
+}

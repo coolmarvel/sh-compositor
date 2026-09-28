@@ -68,6 +68,7 @@ export function serializeDoc(doc: Doc): Record<string, Uint8Array> {
       shClip: l.clip || undefined,
       shEffects: l.effects ?? undefined,
       shAdjustment: l.adjustment ?? undefined,
+      shVectorMask: l.vectorMask ?? undefined,
       shText: l.text ?? undefined,
       shCollapsed: l.collapsed || undefined,
       shShape: l.shape ?? undefined,
@@ -106,6 +107,7 @@ export function serializeDoc(doc: Doc): Record<string, Uint8Array> {
     activeLayerID: doc.activeId,
     // 우리 확장 (Compositor 는 모르는 키라 무시한다)
     shGuides: doc.guides && (doc.guides.v.length || doc.guides.h.length) ? doc.guides : undefined,
+    shPaths: doc.paths?.length ? doc.paths : undefined,
     layers
   }
   files['manifest.json'] = strToU8(JSON.stringify(manifest, null, 2))
@@ -153,6 +155,7 @@ export function deserializeDoc(files: Record<string, Uint8Array>): Doc {
       clip: !!r.shClip || !!r.maskSourceID,
       effects: r.shEffects ?? null,
       adjustment: r.shAdjustment ?? null,
+      vectorMask: r.shVectorMask && Array.isArray(r.shVectorMask.subpaths) ? r.shVectorMask : undefined,
       text: r.shText ?? null,
       collapsed: !!r.shCollapsed,
       shape: r.shShape && typeof r.shShape.kind === 'string' ? r.shShape : undefined,
@@ -162,6 +165,7 @@ export function deserializeDoc(files: Record<string, Uint8Array>): Doc {
   })
   const num = (a: unknown): number[] => (Array.isArray(a) ? a.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)).slice(0, 500) : [])
   const guides = m.shGuides ? { v: num(m.shGuides.v), h: num(m.shGuides.h) } : undefined
+  const paths = Array.isArray(m.shPaths) ? (m.shPaths as Doc['paths']) : undefined
   return {
     id: String(m.documentID),
     width: m.width,
@@ -170,7 +174,8 @@ export function deserializeDoc(files: Record<string, Uint8Array>): Doc {
     layers,
     activeId: m.activeLayerID ?? layers[layers.length - 1]?.id ?? null,
     selection: null,
-    guides
+    guides,
+    ...(paths?.length ? { paths } : {})
   }
 }
 

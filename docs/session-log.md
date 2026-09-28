@@ -1,7 +1,7 @@
 ---
 title: 세션 로그
 created: 2026-09-21
-updated: 2026-09-22
+updated: 2026-09-23
 domain: development
 ---
 
@@ -11,6 +11,37 @@ domain: development
 (커밋/푸시는 사용자가 직접·성긴 단위 — git history 를 이력 SSOT 로 삼지 않는다.)
 
 블록 형식: `## YYYY-MM-DD — 제목` 아래에 **요청/피드백 → 수정 → 검증 → 다음** 순서로 간결하게.
+
+## 2026-09-23 — v1.2.0 포토샵 대비 부족 8가지 구현·Rust 커널 확장·서버 JPEG (사용자 선언 MINOR)
+
+**요청**: "포토샵에 비해 부족한 9가지 중 8가지를 다 해 달라, Rust 로 성능도 올려라, 눈에 띄는 개선도 다 적용하고 1.2.0 으로 올리자". 16비트 색은 이번에 하지 않기로 미리 알렸다 (전면 재설계).
+
+**수정**
+- 닷지·번·스펀지 (O): `core/tone.ts applyTone`(범위 가중·노출·채도), `tools/paint.ts` Kind 'tone', 옵션 줄, MCP `tone_stroke`.
+- 조정 레이어 5종 추가(흑백·색상 균형·활기·포스터화·한계값): `adjustment.more`, CPU `render.ts` + GL `uMore*` 이식, PSD 왕복, 대화상자 레이어 모드, MCP `layer_add`/`layer_update.more`.
+- 색상 범위 선택(`selection.set colorRange`, 대화상자 미리보기) + **퀵 마스크(Q)**: `store.quickMask`·`withQuickMask` 임시 레이어(GPU 경로), 브러시/지우개 `target:'selection'`, Q 로 나갈 때 이력 한 단계. 마스크 추가의 Q 단축키는 뗐다.
+- 그라데이션 덮기·경사와 엠보스: `core/effects.ts gradientOver/bevelOver`, 효과 대화상자 탭 2개, PSD gradientOverlay/bevel 가져오기·내보내기, MCP `layer_update.effects`.
+- 브러시 팁·질감: `BrushSettings.tip/texture`(모양·각도·원형도·간격·흩뿌리기·지터·팁 이미지·질감 PNG), `StrokeCoverage` 결정적 난수(seed), 브러시 설정 대화상자·프리셋 3개, MCP `brush.tip/seed`.
+- 글자별 서식: `TextData.runs`(`core/doc/textruns.ts` applyRun/shiftRuns/segments), `editor/text.ts` 줄바꿈·세로쓰기 런 지원, 편집 중 구간 선택 → 굵게·기울임·색·크기·글꼴, "부분 서식 지우기".
+  **버그**: textarea `onBlur` 가 옵션 줄 클릭에도 커밋해 부분 서식이 불가능했다 → 초점이 옵션 줄·팝오버로 가면 커밋하지 않음.
+- 펜·패스·벡터 마스크: `core/doc/path.ts`(앵커·서브패스·평탄화·`pathMask`·`samplePath`·**`effectiveMask`** = CPU·GL·PSD 공용 마스크), `tools/pen.ts`(클릭·끌기·닫기·Ctrl 꼭짓점 전환·Backspace·Enter·Esc),
+  패스 패널(선택으로·채우기·붓으로 선·벡터 마스크·삭제), 메뉴 "벡터 마스크 떼기", .shcomp `shPaths/shVectorMask`, MCP 6도구(`path_{set,delete,to_selection,fill,stroke}`·`layer_vector_mask`). ADR-0006.
+- 원근·왜곡은 이미 있음(`move.ts applyDistort`). 격자 메시 워프는 하지 않았다.
+- **Rust 커널**: `native/kernels/kernel.rs` 한 파일(리터칭 dab + 가우시안 블러 + 중간값) → `kernels.wasm`. `test/kernel-bench.ts` 로 TS 와 비교해 **중간값 약 2.5배·가우시안 1.3~1.7배** → 채택, 닷지·번·스펀지는 느려서 **미채택**.
+  `core/kernels.ts`·`filters.ts setNativeKernels`(폴백·≤1바이트 차등 테스트), 서버 작업 스레드도 같은 wasm(`server/kernels.ts`). 옛 `native/retouch`·`retouch.wasm`·`build-retouch.cjs` 삭제.
+- 그 밖의 개선: `adjustLayer` 가 선택 경계(+필터 여백)만 계산, 스팟 복구 근접 일치 `Math.random` → `mulberry32`(결정적), 서버 **JPEG** 가져오기·내보내기(`jpeg-js` 0.4.4 BSD-3, 흰 배경·품질 90, SOF 크기 검사로 디코딩 전 한도),
+  업로드 Content-Type 허용 목록(png·jpeg·psd·zip·octet-stream), `layer_list.effects`(켜진 효과 이름), 작업 스레드 예외를 서버 로그에 `task failed` 로 남김(클라이언트엔 INTERNAL 만).
+- 사용 설명서(F1): O·P·Q·색상 범위·조정 레이어·글자별 서식 행, MCP 탭은 카탈로그(58)에서 자동.
+
+**검증**: typecheck · 단위 **101/101**(codecs 3·kernels·commands 신규 포함) · build · Electron E2E **129/129**(O 그룹 9 추가: 닷지·번·스펀지, 색상 범위, 퀵 마스크, 브러시 설정, 효과 탭, 조정 레이어 GPU=CPU, 펜·패스·벡터 마스크, 글자별 서식) ·
+웹 E2E **15/15** · MCP E2E **25/25**(M19b·M19c 추가, M23 이 58도구 전부 호출, JPEG 왕복) · 잔여 프로세스 0.
+**E2E 에서 잡은 것**: Q 를 퀵 마스크로 바꾸면서 옛 C7·I4 가 `press('q')` 로 마스크를 만들던 것 → 메뉴로. MCP "느린 작업"이 Rust 중간값 때문에 기한(2.5초) 안에 끝나 M12 가 깨짐 → 모션 블러(TS, 10초 이상)로.
+jpeg-js 결과 `Buffer` 를 그대로 transfer 해 `DataCloneError`(INTERNAL) → 독립 `Uint8Array` 로 복사. 업로드가 image/png 만 받아 JPEG 415 → 허용 목록. 웹 W13 이 `retouch*.wasm` 을 막던 것 → `kernels`.
+**`npm run audit` 86장에서 잡은 것**: 브러시 설정 미리보기가 비어 있었다 — MUI Dialog(Portal)는 첫 커밋 뒤에 내용을 붙여 `useRef` 캔버스가 첫 effect 에서 null(콜백 ref 상태로 고침, O4 가 픽셀 검사) + `Box component="canvas"` 의 width/height 가 CSS 로 취급돼 300×150 이던 것.
+레이어 효과 탭 7개가 두 줄로 접힘 → 대화상자 600px·탭 `nowrap`. 설명서 MCP 탭 파일 형식에 JPEG 추가.
+인스톨러 v1.2.0 바탕화면 복사, 옛 v1.1.1 설치 파일 정리. 커밋은 사용자 지시 대기.
+
+**다음**: v1.2.0 설치본 테스트(펜·퀵 마스크·브러시 팁 체감), 16비트 색(별도 계획 필요), 메시 워프, 닷지·번 Rust 재측정은 필요할 때만 — todo.
 
 ## 2026-09-23 — v1.1.1 MCP 도구 51개(편집기 기능 전부)·사용 설명서 MCP 탭·실제 AI 클라이언트 검증
 

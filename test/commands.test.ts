@@ -28,7 +28,7 @@ test('tool catalog, MCP schemas and command registry agree', () => {
     assert.ok(t.lines.length && t.lines.every((l) => l.endsWith('.')), `${t.name} 설명은 문장`)
     assert.ok(t.mutates === !!t.command || ['compositor_document_undo', 'compositor_document_redo'].includes(t.name), t.name)
   }
-  assert.equal(TOOL_CATALOG.length, 51)
+  assert.equal(TOOL_CATALOG.length, 58)
 })
 
 test('shape rasterizer: fill, stroke, ellipse and line coverage', () => {
@@ -114,6 +114,17 @@ test('every command parses strict input and edits a document (smoke)', () => {
     brush: { size: 10 },
     strength: 100
   })
+  d = run(C['tone.stroke'], d, {
+    layerId: top,
+    points: [
+      { x: 10, y: 25 },
+      { x: 30, y: 25 }
+    ],
+    mode: 'burn',
+    range: 'midtones',
+    exposure: 80,
+    brush: { size: 10 }
+  })
   d = run(C['clone.stroke'], d, { layerId: top, points: [{ x: 30, y: 5 }], source: { x: 5, y: 5 }, brush: { size: 6, hardness: 1 } })
   d = run(C['heal.stroke'], d, { layerId: top, points: [{ x: 20, y: 5 }], brush: { size: 4 } })
   d = run(C['selection.set'], d, { shape: 'ellipse', x: 10, y: 10, width: 10, height: 10 })
@@ -184,4 +195,135 @@ test('codecs round-trip PNG, PSD and .shcomp documents', () => {
   const png = importDocument(encodePng(4, 4, new Uint8Array(64).fill(200)), 'p', 1e6)
   assert.deepEqual([png.doc.width, png.doc.height], [4, 4])
   assert.throws(() => importDocument(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9]), 'x', 1e6), code('UNSUPPORTED_CAPABILITY'))
+})
+
+test('extra adjustment layers (black & white etc.) are non-destructive and match the destructive result', () => {
+  let d = newDoc(12, 8, [200, 60, 30, 255])
+  const bg = d.layers[0].id
+  d = run(C['layer.add'], d, { kind: 'adjustment', adjustmentKind: 'colorBalance', name: 'cb' })
+  const adj = d.activeId!
+  assert.equal(getLayer(d, adj)!.adjustment!.more!.kind, 'colorBalance')
+  d = run(C['layer.update'], d, { layerId: adj, more: { colorBalance: { midtones: [-60, 0, 40] } } })
+  const viaLayer = px(d, 5, 4)
+  let e = newDoc(12, 8, [200, 60, 30, 255])
+  e = run(C['adjust.more'], e, { layerId: e.layers[0].id, kind: 'colorBalance', colorBalance: { midtones: [-60, 0, 40] } })
+  assert.deepEqual(viaLayer, px(e, 5, 4))
+  assert.deepEqual(getLayer(d, bg)!.bitmap!.data.slice(0, 4), new Uint8ClampedArray([200, 60, 30, 255]), '원본은 그대로')
+  d = run(C['layer.update'], d, { layerId: adj, more: { kind: 'threshold', threshold: 100 } })
+  assert.ok([0, 255].includes(px(d, 5, 4)[0]))
+  assert.throws(() => run(C['layer.update'], d, { layerId: bg, more: { kind: 'posterize' } }), code('INVALID_INPUT'))
+  // PSD 왕복에서 조정 레이어 종류·값이 남는다
+  const back = importDocument(exportDoc(d, 'psd').bytes, 'x', 1e6).doc
+  const a = back.layers.find((l) => l.kind === 'adjustment')!.adjustment!
+  assert.equal(a.kind, 'threshold')
+  assert.equal(a.more!.threshold, 100)
+})
+
+test('gradient overlay and bevel effects render and survive PSD round-trip', () => {
+  let d = newDoc(40, 30, null)
+  d = run(C['shape.add'], d, { kind: 'rect', x: 5, y: 5, width: 30, height: 20, fill: '#808080' })
+  const id = d.activeId!
+  const plain = px(d, 20, 15)
+  d = run(C['layer.update'], d, { layerId: id, effects: { gradientOverlay: { enabled: true, colors: ['#ff0000', '#0000ff'], angle: 0 } } })
+  const left = px(d, 8, 15)
+  const right = px(d, 32, 15)
+  assert.ok(left[0] > 150 && right[2] > 150, `gradient ${left} ${right}`)
+  d = run(C['layer.update'], d, { layerId: id, effects: { gradientOverlay: { enabled: false }, bevel: { enabled: true, style: 'inner', size: 4, depth: 200 } } })
+  const top = px(d, 20, 7)
+  const bottom = px(d, 20, 23)
+  assert.ok(top[0] > plain[0] && bottom[0] < plain[0], `bevel top ${top} bottom ${bottom} plain ${plain}`)
+  assert.throws(() => C['layer.update'].parse({ layerId: id, effects: { bevel: { style: 'fancy' } } }), code('INVALID_INPUT'))
+  d = run(C['layer.update'], d, { layerId: id, effects: { gradientOverlay: { enabled: true } } })
+  const back = importDocument(exportDoc(d, 'psd').bytes, 'x', 1e6).doc
+  const fx = back.layers[1].effects!
+  assert.equal(fx.bevel!.enabled, true)
+  assert.equal(fx.bevel!.size, 4)
+  assert.equal(fx.bevel!.depth, 200)
+  assert.deepEqual(fx.gradientOverlay!.colors, ['#ff0000', '#0000ff'])
+})
+
+test('text runs: apply, split, merge and shift with edits', async () => {
+  const { applyRun, shiftRuns, segments, normalize } = await import('../src/core/doc/textruns')
+  let runs = applyRun(undefined, 2, 6, { bold: true }, 10)
+  assert.deepEqual(runs, [{ start: 2, end: 6, bold: true }])
+  runs = applyRun(runs, 4, 8, { color: '#ff0000' }, 10)
+  assert.deepEqual(runs, [
+    { start: 2, end: 4, bold: true },
+    { start: 4, end: 6, bold: true, color: '#ff0000' },
+    { start: 6, end: 8, color: '#ff0000' }
+  ])
+  runs = applyRun(runs, 0, 10, { bold: undefined }, 10)
+  assert.deepEqual(runs, [{ start: 4, end: 8, color: '#ff0000' }])
+  // 앞에 글자 2개 넣기 → 구간이 밀린다, 구간 안에서 1글자 지우기 → 줄어든다
+  assert.deepEqual(shiftRuns(runs, 0, 0, 2), [{ start: 6, end: 10, color: '#ff0000' }])
+  assert.deepEqual(shiftRuns(runs, 5, 1, 0), [{ start: 4, end: 7, color: '#ff0000' }])
+  assert.equal(normalize([{ start: 3, end: 3, bold: true }]), undefined)
+  assert.deepEqual(
+    segments('0123456789', runs, 0, 10).map((s) => [s.start, s.end, !!s.style.color]),
+    [
+      [0, 4, false],
+      [4, 8, true],
+      [8, 10, false]
+    ]
+  )
+})
+
+test('paths: bezier flattening, path mask, vector mask compositing and commands', async () => {
+  const { flattenSubPath, pathMask, effectiveMask } = await import('../src/core/doc/path')
+  const circleish = {
+    closed: true,
+    anchors: [
+      { x: 20, y: 5, out: { x: 28, y: 5 }, in: { x: 12, y: 5 } },
+      { x: 35, y: 20, out: { x: 35, y: 28 }, in: { x: 35, y: 12 } },
+      { x: 20, y: 35, out: { x: 12, y: 35 }, in: { x: 28, y: 35 } },
+      { x: 5, y: 20, out: { x: 5, y: 12 }, in: { x: 5, y: 28 } }
+    ]
+  }
+  const pts = flattenSubPath(circleish)
+  assert.ok(pts.length > 20, '곡선은 여러 점으로')
+  const m = pathMask(40, 40, [circleish])
+  assert.equal(m[20 * 40 + 20], 255, '가운데는 안')
+  assert.equal(m[2 * 40 + 2], 0, '모서리는 밖')
+  let d = newDoc(40, 40, [255, 0, 0, 255])
+  const bg = d.layers[0].id
+  d = run(C['path.set'], d, { name: 'c', subpaths: [circleish] })
+  const pathId = d.paths![0].id
+  d = run(C['layer.vectorMask'], d, { layerId: bg, pathId })
+  assert.equal(px(d, 20, 20)[3], 255)
+  assert.equal(px(d, 2, 2)[3], 0, '벡터 마스크 밖은 투명')
+  const em = effectiveMask(getLayer(d, bg)!, 40, 40)!
+  assert.equal(em.bitmap.data[(20 * 40 + 20) * 4], 255)
+  d = run(C['layer.update'], d, { layerId: bg, x: 10 })
+  assert.equal(px(d, 30, 20)[3], 255, '레이어를 옮겨도 벡터 마스크는 문서 좌표에 그대로')
+  assert.equal(px(d, 2, 2)[3], 0)
+  d = run(C['layer.vectorMask'], d, { layerId: bg, pathId: null })
+  assert.equal(px(d, 12, 2)[3], 255)
+  d = run(C['path.toSelection'], d, { pathId })
+  assert.ok(d.selection!.bounds!.w >= 28 && d.selection!.bounds!.w <= 32, JSON.stringify(d.selection!.bounds))
+  d = run(C['selection.set'], d, { shape: 'none' })
+  d = run(C['layer.add'], d, { kind: 'pixel' })
+  const top = d.activeId!
+  d = run(C['path.fill'], d, { pathId, layerId: top, color: '#00ff00' })
+  assert.deepEqual(px(d, 20, 20), [0, 255, 0, 255])
+  d = run(C['path.stroke'], d, { pathId, layerId: top, color: '#0000ff', brush: { size: 4, hardness: 1 } })
+  assert.deepEqual(px(d, 20, 5).slice(0, 3), [0, 0, 255], `stroke ${px(d, 20, 5)}`)
+  d = run(C['path.set'], d, {
+    pathId,
+    name: 'renamed',
+    subpaths: [
+      {
+        closed: false,
+        anchors: [
+          { x: 0, y: 0 },
+          { x: 10, y: 10 }
+        ]
+      }
+    ]
+  })
+  assert.equal(d.paths![0].name, 'renamed')
+  const back = importDocument(exportDoc(d, 'shcomp').bytes, 'x', 1e6).doc
+  assert.equal(back.paths![0].id, pathId, '.shcomp 에 패스가 남는다')
+  d = run(C['path.delete'], d, { pathId })
+  assert.equal(d.paths, undefined)
+  assert.throws(() => run(C['path.fill'], d, { pathId, layerId: top, color: '#000000' }), code('NOT_FOUND'))
 })

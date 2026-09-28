@@ -1,5 +1,6 @@
-import { blurDab, smudgeDab, pushDab } from '@core/retouch'
-import { nativeRetouch } from '../editor/retouchWasm'
+import { retouchDab } from '@core/retouch'
+import { makeSelection, mulberry32 } from '@core/index'
+import { applyTone } from '@core/tone'
 /**
  * 칠하기 계열 도구 — 브러시·지우개(B·E), 흐림/문지르기/리퀴파이(R), 복제 도장(S), 스팟 복구(J).
  * 출처: Compositor `BrushStroke`·`SmudgeLiquify`·`CloneStamp`·`HealPixels.c`.
@@ -11,7 +12,7 @@ import { nativeRetouch } from '../editor/retouchWasm'
  * 선택 영역이 있으면 선택 밖에는 칠해지지 않는다(선택 덮임을 곱한다).
  * 키: [ ] 크기, Shift+[ ] 경도, 1~0 불투명도(강도), Shift+클릭 = 지난 점에서 직선.
  */
-import { editor } from '../editor/store'
+import { editor, quickMaskTint, withQuickMask } from '../editor/store'
 import { bakeLayer, selWeight, pixelsLocked } from '../editor/pixels'
 import { StrokeCoverage, applyStroke, getLayer, updateLayer, flattenDoc, contentFill, type Doc, type Bitmap, type BrushSettings } from '@core/index'
 import type { ToolHandler, ToolCtx, PointerInfo, Pt } from './types'
@@ -19,8 +20,10 @@ import type { ToolHandler, ToolCtx, PointerInfo, Pt } from './types'
 interface Session {
   base: Doc
   layerId: string
-  target: 'layer' | 'mask'
+  target: 'layer' | 'mask' | 'selection'
   orig: Uint8ClampedArray
+  /** 퀵 마스크: 화면에 얹는 빨간 물듦의 마스크 (= 255 − live) */
+  tint?: Bitmap
   live: Bitmap
   stroke: StrokeCoverage
   ox: number
@@ -47,13 +50,50 @@ let hover: Pt | null = null
 let cloneSource: Pt | null = null
 let cloneOffset: Pt | null = null
 
-type Kind = 'brush' | 'blur' | 'clone' | 'heal'
+type Kind = 'brush' | 'blur' | 'clone' | 'heal' | 'tone'
 
 const gray = (c: [number, number, number]): number => Math.round(0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2])
+
+/** 퀵 마스크 모드: 선택 영역을 회색 비트맵으로 칠한다 (흰색 = 선택). 붓·지우개만 */
+function beginQuickMask(c: ToolCtx, doc: Doc, kind: Kind): Session | null {
+  if (kind !== 'brush') {
+    editor.toast('info', '퀵 마스크 모드에서는 브러시와 지우개로 선택 영역을 고칩니다. Q 로 나갑니다.')
+    return null
+  }
+  const W = doc.width
+  const H = doc.height
+  const orig = new Uint8ClampedArray(W * H * 4)
+  const m = doc.selection?.mask
+  for (let i = 0; i < W * H; i++) {
+    const v = m ? m[i] : 255
+    orig[i * 4] = orig[i * 4 + 1] = orig[i * 4 + 2] = v
+    orig[i * 4 + 3] = 255
+  }
+  const live: Bitmap = { width: W, height: H, data: orig.slice() }
+  const tint: Bitmap = { width: W, height: H, data: quickMaskTint(doc).data.slice() }
+  const sess: Session = {
+    base: doc,
+    layerId: '',
+    target: 'selection',
+    orig,
+    live,
+    tint,
+    stroke: new StrokeCoverage(W, H, editor.state.settings.brush),
+    ox: 0,
+    oy: 0,
+    last: null,
+    extra: {},
+    bbox: null
+  }
+  editor.setPreview(withQuickMask(doc, tint))
+  c.renderer()?.cloneTexture(quickMaskTint(doc), tint)
+  return sess
+}
 
 function begin(c: ToolCtx, kind: Kind, p: PointerInfo): Session | null {
   const doc = c.doc()
   if (!doc) return null
+  if (editor.state.quickMask) return beginQuickMask(c, doc, kind)
   const l = getLayer(doc, doc.activeId)
   // 마스크 편집 중이면 폴더·조정 레이어의 마스크에도 칠한다
   const onMask = !!l && editor.state.maskEditing && !!l.mask
@@ -67,7 +107,7 @@ function begin(c: ToolCtx, kind: Kind, p: PointerInfo): Session | null {
   }
   const target = editor.state.maskEditing && l.mask ? 'mask' : 'layer'
   if (target === 'layer' && pixelsLocked(l, (m) => editor.toast('info', m))) return null
-  if (target === 'mask' && kind !== 'brush' && kind !== 'blur') {
+  if (target === 'mask' && kind !== 'brush' && kind !== 'blur' && kind !== 'tone') {
     editor.toast('info', '이 도구는 마스크가 아니라 레이어 픽셀에만 씁니다.')
     return null
   }
@@ -76,7 +116,7 @@ function begin(c: ToolCtx, kind: Kind, p: PointerInfo): Session | null {
   const bmp = target === 'mask' ? bl.mask!.bitmap : bl.bitmap!
   const live: Bitmap = { width: bmp.width, height: bmp.height, data: bmp.data.slice() }
   const s = editor.state.settings.brush
-  const settings: BrushSettings = kind === 'blur' ? { ...s, opacity: editor.state.settings.blurStrength / 100 } : kind === 'heal' ? { ...s, opacity: 1 } : s
+  const settings: BrushSettings = kind === 'blur' ? { ...s, opacity: editor.state.settings.blurStrength / 100 } : kind === 'heal' || kind === 'tone' ? { ...s, opacity: 1 } : s
   const sess: Session = {
     base,
     layerId: l.id,
@@ -107,13 +147,25 @@ function begin(c: ToolCtx, kind: Kind, p: PointerInfo): Session | null {
 /** 선택 제한 (레이어 픽셀 i → 문서) */
 function limitFn(s: Session): ((i: number) => number) | undefined {
   const doc = s.base
-  if (!doc.selection) return undefined
+  if (!doc.selection || s.target === 'selection') return undefined
   const W = s.live.width
   return (i) => selWeight(doc, (i % W) + s.ox, ((i / W) | 0) + s.oy)
 }
 
 function upload(c: ToolCtx, s: Session, r: { x: number; y: number; w: number; h: number } | null): void {
   if (!r) return
+  if (s.target === 'selection' && s.tint) {
+    // 퀵 마스크: 물듦 = 255 − live (바뀐 영역만)
+    const W = s.live.width
+    for (let y = r.y; y < r.y + r.h; y++)
+      for (let x = r.x; x < r.x + r.w; x++) {
+        const o = (y * W + x) * 4
+        s.tint.data[o] = s.tint.data[o + 1] = s.tint.data[o + 2] = 255 - s.live.data[o]
+      }
+    c.renderer()?.uploadRect(s.tint, r)
+    c.redraw()
+    return
+  }
   // 투명 픽셀 잠금: 칠한 영역의 알파를 원래대로 (있던 픽셀 위에만 색이 입혀진다)
   if (s.target === 'layer' && getLayer(s.base, s.layerId)?.lock?.alpha) {
     const W = s.live.width
@@ -131,11 +183,24 @@ function strokeTo(c: ToolCtx, s: Session, p: Pt, pressure: number): void {
   const erase = editor.state.settings.brushMode === 'erase'
   const fg = editor.state.fg
   const bg = editor.state.bg
-  if (s.target === 'mask') {
-    const v = gray(erase ? bg : fg)
+  if (s.target === 'mask' || s.target === 'selection') {
+    // 퀵 마스크: 칠하기 = 흰색(선택), 지우개 = 검정(선택 해제) — 색은 무시
+    const v = s.target === 'selection' ? (erase ? 0 : 255) : gray(erase ? bg : fg)
     applyStroke({ width: s.live.width, height: s.live.height, data: s.orig }, s.stroke, [v, v, v], 'paint', limitFn(s), s.live.data, r)
   } else applyStroke({ width: s.live.width, height: s.live.height, data: s.orig }, s.stroke, fg, erase ? 'erase' : 'paint', limitFn(s), s.live.data, r)
   upload(c, s, r)
+}
+
+/** 닷지·번·스펀지: 획 덮임을 원본에 한 번에 적용 (겹쳐도 누적되지 않는다 — core/tone.ts) */
+function toneTo(c: ToolCtx, s: Session, p: Pt, pressure: number): void {
+  s.stroke.lineTo(p.x - s.ox, p.y - s.oy, pressure)
+  const r = s.stroke.takeDirty()
+  if (!r) return
+  const st = editor.state.settings
+  s.bbox = unionRect(s.bbox, r)
+  // 덮임은 획 전체에서 누적되므로 지금까지 닿은 전체 영역을 다시 계산한다 (붓처럼 원본 기준)
+  applyTone(s.orig, s.live.data, s.live.width, s.stroke.cov, s.bbox!, { mode: st.toneMode, range: st.toneRange, exposure: st.toneExposure / 100, saturate: st.toneSaturate }, limitFn(s))
+  upload(c, s, s.bbox)
 }
 
 /** 복제 도장: 덮임만큼 원본(오프셋 위치)을 칠한다 */
@@ -256,9 +321,11 @@ function heal(s: Session): { x: number; y: number; w: number; h: number } | null
       }
     return n ? sum / n : Infinity
   }
+  // 결정적 난수: 같은 자리를 같은 획으로 고치면 같은 결과 (E2E·재현용)
+  const rand = mulberry32((wx0 * 73856093) ^ (wy0 * 19349663) ^ 0x9e3779b9)
   for (let k = 0; k < 400; k++) {
-    const ang = Math.random() * Math.PI * 2
-    const dist = Math.max(ww, wh) * (1 + Math.random() * 2)
+    const ang = rand() * Math.PI * 2
+    const dist = Math.max(ww, wh) * (1 + rand() * 2)
     const dx = Math.round(Math.cos(ang) * dist)
     const dy = Math.round(Math.sin(ang) * dist)
     const sc = score(dx, dy)
@@ -304,6 +371,14 @@ function finish(label: string): void {
   const s = session
   session = null
   if (!s) return
+  if (s.target === 'selection') {
+    const W = s.live.width
+    const m = new Uint8Array(W * s.live.height)
+    for (let i = 0; i < m.length; i++) m[i] = s.live.data[i * 4]
+    editor.setPreview(null)
+    editor.commit({ ...s.base, selection: makeSelection(W, s.live.height, m) }, '퀵 마스크')
+    return
+  }
   const l = getLayer(s.base, s.layerId)!
   // 세션이 끝나므로 살아 있던 사본을 그대로 확정한다 (큰 레이어를 한 번 더 복사하지 않음 — 텍스처도 그대로 쓰인다)
   const bitmap: Bitmap = s.live
@@ -327,6 +402,7 @@ const sizeKeys = (c: ToolCtx, e: KeyboardEvent, kind: Kind): boolean => {
   if (/^[0-9]$/.test(e.key) && !e.ctrlKey && !e.altKey) {
     const v = e.key === '0' ? 1 : Number(e.key) / 10
     if (kind === 'blur') editor.setSettings({ blurStrength: Math.round(v * 100) })
+    else if (kind === 'tone') editor.setSettings({ toneExposure: Math.round(v * 100) })
     else editor.setSettings({ brush: { ...b, opacity: v } })
     return true
   }
@@ -371,6 +447,7 @@ function brushLike(kind: Kind): ToolHandler {
       const s = session
       const pr = p.e.pointerType === 'pen' ? Math.max(0.1, p.pressure) : 1
       if (kind === 'brush') strokeTo(c, s, p.p, pr)
+      else if (kind === 'tone') toneTo(c, s, p.p, pr)
       else if (kind === 'clone') cloneTo(c, s, p.p, pr)
       else if (kind === 'heal') {
         s.stroke.lineTo(p.p.x - s.ox, p.p.y - s.oy, pr)
@@ -388,7 +465,7 @@ function brushLike(kind: Kind): ToolHandler {
         for (let i = 1; i <= n; i++) {
           const b = { x: prev.x + ((cur.x - prev.x) * i) / n, y: prev.y + ((cur.y - prev.y) * i) / n }
           const rs = { live: s.live, stroke: s.stroke, limit: limitFn(s) }
-          const rr = nativeRetouch(rs, mode, a, b) ?? (mode === 'blur' ? blurDab(rs, b.x, b.y) : mode === 'smudge' ? smudgeDab(rs, a, b) : pushDab(rs, a, b))
+          const rr = retouchDab(rs, mode, a, b)
           if (rr) r = r ? { x: Math.min(r.x, rr.x), y: Math.min(r.y, rr.y), w: Math.max(r.x + r.w, rr.x + rr.w) - Math.min(r.x, rr.x), h: Math.max(r.y + r.h, rr.y + rr.h) - Math.min(r.y, rr.y) } : rr
           a = b
         }
@@ -414,7 +491,9 @@ function brushLike(kind: Kind): ToolHandler {
             ? '복제 도장'
             : kind === 'heal'
               ? '스팟 복구'
-              : { blur: '흐림', smudge: '문지르기', liquify: '리퀴파이' }[editor.state.settings.blurMode]
+              : kind === 'tone'
+                ? { dodge: '닷지', burn: '번', sponge: '스펀지' }[editor.state.settings.toneMode]
+                : { blur: '흐림', smudge: '문지르기', liquify: '리퀴파이' }[editor.state.settings.blurMode]
       )
       c.redraw()
     },
@@ -477,6 +556,7 @@ export const brushTool = brushLike('brush')
 export const blurTool = brushLike('blur')
 export const cloneTool = brushLike('clone')
 export const healTool = brushLike('heal')
+export const toneTool = brushLike('tone')
 
 export function isPainting(): boolean {
   return !!session

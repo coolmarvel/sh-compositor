@@ -58,11 +58,24 @@ const brush = z
     hardness: z.number().min(0).max(1).optional(),
     opacity: z.number().min(0).max(1).optional(),
     pressureSize: z.boolean().optional(),
-    pressureOpacity: z.boolean().optional()
+    pressureOpacity: z.boolean().optional(),
+    tip: z
+      .object({
+        shape: z.enum(['round', 'square']).optional(),
+        angle: z.number().min(-360).max(360).optional(),
+        roundness: z.number().min(0.05).max(1).optional().describe('1 = 원, 작을수록 납작'),
+        spacing: z.number().min(0.01).max(2).optional().describe('점 간격 (지름 배수)'),
+        scatter: z.number().min(0).max(2).optional(),
+        sizeJitter: z.number().min(0).max(1).optional(),
+        opacityJitter: z.number().min(0).max(1).optional()
+      })
+      .strict()
+      .optional(),
+    seed: z.number().int().min(0).max(0xffffffff).optional().describe('흩뿌리기·지터 난수 (같은 seed = 같은 획)')
   })
   .strict()
   .optional()
-  .describe('붓 (기본 30px·경도 0.8·불투명도 1)')
+  .describe('붓 (기본 30px·경도 0.8·불투명도 1). tip 으로 사각·납작·회전·흩뿌리기')
 const target = z.enum(['layer', 'mask']).optional().describe('레이어 픽셀(기본) 또는 그 마스크')
 const ids = z.array(ID).min(1).max(256)
 const blendKeys = BLEND_MODES.map((b) => b.key) as [string, ...string[]]
@@ -120,13 +133,53 @@ const effects = z
     shadow: shadowPart,
     innerShadow: shadowPart,
     overlay: effectPart({}),
-    outerGlow: effectPart({ size: z.number().min(0).max(500).optional(), spread: z.number().min(0).max(100).optional() })
+    outerGlow: effectPart({ size: z.number().min(0).max(500).optional(), spread: z.number().min(0).max(100).optional() }),
+    gradientOverlay: z
+      .object({
+        enabled: z.boolean().optional(),
+        style: z.enum(['linear', 'radial']).optional(),
+        angle: z.number().min(-360).max(360).optional(),
+        colors: z.tuple([color, color]).optional(),
+        opacity: z.number().min(0).max(1).optional(),
+        scale: z.number().min(10).max(150).optional(),
+        reverse: z.boolean().optional()
+      })
+      .strict()
+      .optional(),
+    bevel: z
+      .object({
+        enabled: z.boolean().optional(),
+        style: z.enum(['inner', 'outer', 'emboss']).optional(),
+        size: z.number().min(1).max(250).optional(),
+        depth: z.number().min(1).max(500).optional(),
+        soften: z.number().min(0).max(50).optional(),
+        angle: z.number().min(-360).max(360).optional(),
+        altitude: z.number().min(0).max(90).optional(),
+        direction: z.enum(['up', 'down']).optional(),
+        highlightColor: color.optional(),
+        highlightOpacity: z.number().min(0).max(1).optional(),
+        shadowColor: color.optional(),
+        shadowOpacity: z.number().min(0).max(1).optional()
+      })
+      .strict()
+      .optional()
   })
   .strict()
   .optional()
   .describe('레이어 효과 — 준 항목만 바꾼다')
 const bwPart = z.number().min(-200).max(300).optional()
 const cbPart = z.array(z.number().min(-100).max(100)).length(3).optional()
+const moreSchema = z
+  .object({
+    kind: z.enum(MORE_KINDS as [string, ...string[]]).optional(),
+    blackWhite: z.object({ reds: bwPart, yellows: bwPart, greens: bwPart, cyans: bwPart, blues: bwPart, magentas: bwPart }).strict().optional(),
+    colorBalance: z.object({ shadows: cbPart, midtones: cbPart, highlights: cbPart, preserveLuminosity: z.boolean().optional() }).strict().optional(),
+    vibrance: z.number().min(-100).max(100).optional(),
+    saturation: z.number().min(-100).max(100).optional(),
+    levels: z.number().int().min(2).max(255).optional(),
+    threshold: z.number().int().min(1).max(255).optional()
+  })
+  .strict()
 
 /** 변경 도구의 매개변수 (공통 docId·expectedRevision·operationId·waitMs 는 자동으로 붙는다) */
 const MUTATION_SCHEMAS: Record<string, ZodRawShape> = {
@@ -164,6 +217,7 @@ const MUTATION_SCHEMAS: Record<string, ZodRawShape> = {
     lock: z.object({ alpha: z.boolean().optional(), pixels: z.boolean().optional(), position: z.boolean().optional() }).strict().optional(),
     effects,
     adjustment: adjustment.optional().describe('조정 레이어의 설정 (준 항목만)'),
+    more: moreSchema.optional().describe('흑백·색상 균형·활기·포스터화·한계값 조정 레이어의 설정 (준 항목만)'),
     shape: z
       .object({
         fill: color.nullable().optional(),
@@ -195,7 +249,7 @@ const MUTATION_SCHEMAS: Record<string, ZodRawShape> = {
   compositor_layer_flip: { layerId, axis: z.enum(['horizontal', 'vertical']) },
   compositor_layer_via_copy: { layerId, cut: z.boolean().optional() },
   compositor_selection_set: {
-    shape: z.enum(['all', 'none', 'invert', 'rect', 'ellipse', 'polygon', 'wand', 'layerAlpha']),
+    shape: z.enum(['all', 'none', 'invert', 'rect', 'ellipse', 'polygon', 'wand', 'layerAlpha', 'colorRange']),
     mode: z.enum(['replace', 'add', 'subtract', 'intersect']).optional(),
     x: px.optional(),
     y: px.optional(),
@@ -206,7 +260,10 @@ const MUTATION_SCHEMAS: Record<string, ZodRawShape> = {
     contiguous: z.boolean().optional(),
     sampleAll: z.boolean().optional().describe('wand: 보이는 그대로에서 (기본 layerId 의 레이어에서)'),
     layerId: ID.optional(),
-    antialias: z.boolean().optional()
+    antialias: z.boolean().optional(),
+    color: color.optional().describe('colorRange 기준 색'),
+    fuzziness: z.number().min(1).max(200).optional(),
+    invert: z.boolean().optional()
   },
   compositor_selection_modify: {
     op: z.enum(['expand', 'contract', 'feather', 'smooth', 'move']),
@@ -214,11 +271,34 @@ const MUTATION_SCHEMAS: Record<string, ZodRawShape> = {
     dx: z.number().int().optional(),
     dy: z.number().int().optional()
   },
+  compositor_path_set: {
+    pathId: ID.optional(),
+    name: z.string().max(255).optional(),
+    subpaths: z
+      .array(
+        z
+          .object({
+            closed: z.boolean().optional(),
+            anchors: z
+              .array(z.object({ x: z.number(), y: z.number(), in: pt.nullable().optional(), out: pt.nullable().optional() }).strict())
+              .min(2)
+              .max(5000)
+          })
+          .strict()
+      )
+      .min(1)
+      .max(256)
+  },
+  compositor_path_delete: { pathId: ID },
+  compositor_path_to_selection: { pathId: ID, mode: z.enum(['replace', 'add', 'subtract', 'intersect']).optional() },
+  compositor_path_fill: { pathId: ID, layerId, color, opacity: z.number().min(0).max(1).optional() },
+  compositor_path_stroke: { pathId: ID, layerId, color: color.optional(), brush, mode: z.enum(['paint', 'erase']).optional() },
+  compositor_layer_vector_mask: { layerId, pathId: ID.nullable(), inverted: z.boolean().optional(), enabled: z.boolean().optional() },
   compositor_pixels_fill: { layerId, color, target },
   compositor_pixels_erase: { layerId },
   compositor_pixels_stroke_selection: { layerId, width: z.number().min(1).max(500), color, position: z.enum(['inside', 'center', 'outside']).optional(), opacity: z.number().min(0).max(1).optional() },
   compositor_pixels_content_fill: { layerId },
-  compositor_brush_stroke: { layerId, points: ptsP, brush, mode: z.enum(['paint', 'erase']).optional(), color: color.optional(), target },
+  compositor_brush_stroke: { layerId, points: ptsP, brush, mode: z.enum(['paint', 'erase']).optional(), color: color.optional(), target: z.enum(['layer', 'mask', 'selection']).optional() },
   compositor_gradient_apply: {
     layerId,
     from: pt,
@@ -230,6 +310,16 @@ const MUTATION_SCHEMAS: Record<string, ZodRawShape> = {
     target
   },
   compositor_retouch_stroke: { layerId, points: pts, mode: z.enum(['blur', 'smudge', 'liquify']), brush, strength: z.number().min(1).max(100).optional(), target },
+  compositor_tone_stroke: {
+    layerId,
+    points: ptsP,
+    mode: z.enum(['dodge', 'burn', 'sponge']),
+    range: z.enum(['shadows', 'midtones', 'highlights']).optional(),
+    exposure: z.number().min(1).max(100).optional(),
+    saturate: z.boolean().optional(),
+    brush,
+    target
+  },
   compositor_clone_stroke: { layerId, points: ptsP, source: pt.describe('가져올 원본 점'), brush, sampleAll: z.boolean().optional() },
   compositor_heal_stroke: { layerId, points: ptsP, brush },
   compositor_shape_add: {
@@ -413,7 +503,7 @@ export function createMcpServer(o: McpOptions): McpServer {
   reg(
     'compositor_export',
     {
-      inputSchema: { docId, format: z.enum(['png', 'shcomp', 'psd']), revision: z.number().int().min(1).optional(), operationId: operationId.optional(), waitMs },
+      inputSchema: { docId, format: z.enum(['png', 'jpeg', 'shcomp', 'psd']), revision: z.number().int().min(1).optional(), operationId: operationId.optional(), waitMs },
       outputSchema: JOB_OUT,
       annotations: { ...READ, idempotentHint: true }
     },

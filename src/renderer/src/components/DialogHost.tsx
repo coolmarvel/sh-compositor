@@ -25,6 +25,9 @@ import {
   DEFAULT_MATTE,
   refineMatte,
   makeSelection,
+  combine,
+  colorRangeMask,
+  type SelectMode,
   smoothSelection,
   featherSelection,
   type Selection,
@@ -64,6 +67,7 @@ const RenameDialog = lazy(() => import('./dialogs/RenameDialog'))
 const ConfirmCloseDialog = lazy(() => import('./dialogs/ConfirmCloseDialog'))
 const AboutDialog = lazy(() => import('./dialogs/AboutDialog'))
 const HelpDialog = lazy(() => import('./dialogs/HelpDialog'))
+const BrushDialog = lazy(() => import('./dialogs/BrushDialog'))
 
 const { color, font } = ui
 const close = (): void => editor.set({ dialog: null })
@@ -476,32 +480,48 @@ function shortGpu(name: string): string {
 }
 
 /** 이미지 ▸ 조정 ▸ 흑백·색상 균형·활기·포스터화·한계값 — 활성 레이어(선택 영역 한정)에, 잠시 뒤 캔버스 미리보기 */
-function MoreAdjustHost({ which }: { which: MoreAdjustKind }): JSX.Element | null {
+function MoreAdjustHost({ which, layerId }: { which: MoreAdjustKind; layerId?: string }): JSX.Element | null {
   const doc = useRef(editor.doc).current
-  const target = doc ? getLayer(doc, doc.activeId) : null
-  const [a, setA] = useState<MoreAdjust>({ ...DEFAULT_MORE, kind: which })
+  // 조정 레이어(layerId)면 그 레이어의 설정을 바로 고친다 (비파괴). 아니면 활성 픽셀 레이어에 파괴적으로
+  const adjLayer = doc && layerId ? getLayer(doc, layerId) : null
+  const target = doc && !layerId ? getLayer(doc, doc.activeId) : null
+  const initial = useRef<MoreAdjust>(adjLayer?.adjustment?.more ?? { ...DEFAULT_MORE, kind: which }).current
+  const [a, setA] = useState<MoreAdjust>(initial)
   const [tone, setTone] = useState<'shadows' | 'midtones' | 'highlights'>('midtones')
   const latest = useRef(a)
   latest.current = a
+  const gesture = useGestureEdit<MoreAdjust>(initial, '조정 설정', (d, m) => updateLayer(d, adjLayer!.id, { adjustment: { ...adjLayer!.adjustment!, kind: m.kind, more: m } }))
   useEffect(() => {
     if (!doc || !target) return
     const t = setTimeout(() => editor.setPreview(editPixels(doc, target.id, 'layer', undefined, (px) => applyMoreAdjust(px, a))), 150)
     return () => clearTimeout(t)
   }, [a]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => editor.setPreview(null), [])
-  if (!doc || !target) return null
+  if (!doc || (!target && !adjLayer?.adjustment)) return null
+  const change = (m: MoreAdjust): void => {
+    setA(m)
+    if (adjLayer) gesture.onChange(m)
+  }
   const ok = (): void => {
+    if (adjLayer) return gesture.onClose()
     editor.setPreview(null)
     close()
     const d = editor.doc
-    if (d)
+    if (d && target)
       editor.commit(
         editPixels(d, target.id, 'layer', undefined, (px) => applyMoreAdjust(px, latest.current)),
         MORE_LABELS[latest.current.kind]
       )
   }
+  const cancel = (): void => {
+    if (adjLayer) {
+      gesture.onChange(initial)
+      return gesture.onClose()
+    }
+    close()
+  }
   const bw = (k: keyof typeof a.bw, label: string): JSX.Element => (
-    <SliderRow key={k} label={label} labelWidth={60} value={a.bw[k]} min={-200} max={300} unit="%" onChange={(v) => setA({ ...a, bw: { ...a.bw, [k]: v } })} />
+    <SliderRow key={k} label={label} labelWidth={60} value={a.bw[k]} min={-200} max={300} unit="%" onChange={(v) => change({ ...a, bw: { ...a.bw, [k]: v } })} />
   )
   const cbRow = (tone: 'shadows' | 'midtones' | 'highlights', i: 0 | 1 | 2, label: string): JSX.Element => (
     <SliderRow
@@ -514,20 +534,20 @@ function MoreAdjustHost({ which }: { which: MoreAdjustKind }): JSX.Element | nul
       onChange={(v) => {
         const arr = [...a.cb[tone]] as [number, number, number]
         arr[i] = v
-        setA({ ...a, cb: { ...a.cb, [tone]: arr } })
+        change({ ...a, cb: { ...a.cb, [tone]: arr } })
       }}
     />
   )
   return (
     <ClassicDialog
       open
-      title={`${MORE_LABELS[a.kind]}${doc.selection ? ' (선택 영역만)' : ''}`}
-      onClose={close}
+      title={adjLayer ? `${MORE_LABELS[a.kind]} (조정 레이어)` : `${MORE_LABELS[a.kind]}${doc.selection ? ' (선택 영역만)' : ''}`}
+      onClose={cancel}
       onEnter={ok}
       width={480}
       actions={
         <>
-          <Button variant="outlined" onClick={close}>
+          <Button variant="outlined" onClick={cancel}>
             취소
           </Button>
           <Button variant="contained" onClick={ok}>
@@ -536,7 +556,7 @@ function MoreAdjustHost({ which }: { which: MoreAdjustKind }): JSX.Element | nul
         </>
       }
     >
-      <ClassicTabs value={a.kind} onChange={(kind) => setA({ ...a, kind })} tabs={(Object.keys(MORE_LABELS) as MoreAdjustKind[]).map((k) => ({ key: k, label: MORE_LABELS[k] }))} />
+      <ClassicTabs value={a.kind} onChange={(kind) => change({ ...a, kind })} tabs={(Object.keys(MORE_LABELS) as MoreAdjustKind[]).map((k) => ({ key: k, label: MORE_LABELS[k] }))} />
       <Box sx={{ minHeight: 250, display: 'flex', flexDirection: 'column', gap: '6px', pt: '8px' }}>
         {a.kind === 'blackWhite' && (
           <>
@@ -568,20 +588,20 @@ function MoreAdjustHost({ which }: { which: MoreAdjustKind }): JSX.Element | nul
             {cbRow(tone, 0, '청록 ↔ 빨강')}
             {cbRow(tone, 1, '마젠타 ↔ 초록')}
             {cbRow(tone, 2, '노랑 ↔ 파랑')}
-            <Check label="밝기 유지" checked={a.cb.preserveLuminosity} onChange={(preserveLuminosity) => setA({ ...a, cb: { ...a.cb, preserveLuminosity } })} />
+            <Check label="밝기 유지" checked={a.cb.preserveLuminosity} onChange={(preserveLuminosity) => change({ ...a, cb: { ...a.cb, preserveLuminosity } })} />
           </>
         )}
         {a.kind === 'vibrance' && (
           <>
-            <SliderRow label="활기" labelWidth={60} value={a.vibrance} min={-100} max={100} onChange={(vibrance) => setA({ ...a, vibrance })} />
-            <SliderRow label="채도" labelWidth={60} value={a.saturation} min={-100} max={100} onChange={(saturation) => setA({ ...a, saturation })} />
+            <SliderRow label="활기" labelWidth={60} value={a.vibrance} min={-100} max={100} onChange={(vibrance) => change({ ...a, vibrance })} />
+            <SliderRow label="채도" labelWidth={60} value={a.saturation} min={-100} max={100} onChange={(saturation) => change({ ...a, saturation })} />
             <Lines>{['활기는 흐린 색을 더 많이, 이미 선명한 색은 조금만 올립니다.', '인물 사진에서 피부가 과하게 붉어지지 않습니다.']}</Lines>
           </>
         )}
-        {a.kind === 'posterize' && <SliderRow label="단계" labelWidth={60} value={a.levels} min={2} max={32} onChange={(levels) => setA({ ...a, levels })} />}
+        {a.kind === 'posterize' && <SliderRow label="단계" labelWidth={60} value={a.levels} min={2} max={32} onChange={(levels) => change({ ...a, levels })} />}
         {a.kind === 'threshold' && (
           <>
-            <SliderRow label="경계" labelWidth={60} value={a.threshold} min={1} max={255} onChange={(threshold) => setA({ ...a, threshold })} />
+            <SliderRow label="경계" labelWidth={60} value={a.threshold} min={1} max={255} onChange={(threshold) => change({ ...a, threshold })} />
             <Lines>{['이 밝기보다 밝으면 흰색, 어두우면 검정이 됩니다.']}</Lines>
           </>
         )}
@@ -596,6 +616,95 @@ const MORE_LABELS: Record<MoreAdjustKind, string> = { blackWhite: '흑백', colo
  * 선택 ▸ 가장자리 다듬기 (포토샵 Select and Mask 의 핵심만) — 그림의 경계를 길잡이로 선택 테두리를 맞춘다.
  * 가장자리 감지(가이드 필터)로 머리카락·털을 살리고, 매끄럽게·페더·대비·가장자리 이동으로 다듬는다. 미리보기는 바로.
  */
+/** 선택 ▸ 색상 범위 — 기준 색·허용치로 비슷한 색을 선택 (미리보기: 선택 밖 어둡게) */
+function ColorRangeDialog(): JSX.Element {
+  const d0 = useRef(editor.doc).current
+  const [o, setO] = useState({ color: `#${editor.state.fg.map((v) => v.toString(16).padStart(2, '0')).join('')}`, fuzziness: 40, invert: false, sampleAll: true, mode: 'replace' as SelectMode })
+  const rgb = (): [number, number, number] => [parseInt(o.color.slice(1, 3), 16), parseInt(o.color.slice(3, 5), 16), parseInt(o.color.slice(5, 7), 16)]
+  const preview = useRef<Selection | null>(null)
+  useEffect(() => {
+    if (!d0) return
+    const t = setTimeout(() => {
+      const src = o.sampleAll
+        ? mergedBitmap(d0)
+        : (() => {
+            const l = getLayer(d0, d0.activeId)
+            return l?.bitmap ? mergedBitmap({ ...d0, selection: null, layers: [{ ...l, parentId: null, clip: false, visible: true, blend: 'normal', opacity: 1 }] }) : null
+          })()
+      if (!src) return
+      const sel = combine(d0.selection, d0.width, d0.height, colorRangeMask(src.data, d0.width, d0.height, rgb(), o.fuzziness, o.invert), o.mode)
+      preview.current = sel
+      const W = d0.width
+      const H = d0.height
+      const inv = new Uint8ClampedArray(W * H * 4)
+      for (let i = 0; i < W * H; i++) {
+        inv[i * 4] = inv[i * 4 + 1] = inv[i * 4 + 2] = 255 - (sel?.mask[i] ?? 0)
+        inv[i * 4 + 3] = 255
+      }
+      const tint = makeLayer('pixel', '미리보기', { width: 1, height: 1, data: new Uint8ClampedArray([0, 0, 0, 255]) }, identityTransform(W, H), {
+        opacity: 0.6,
+        mask: { bitmap: { width: W, height: H, data: inv }, enabled: true, linked: true }
+      })
+      editor.setPreview({ ...d0, layers: [...d0.layers, tint], selection: sel })
+    }, 120)
+    return () => clearTimeout(t)
+  }, [o]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => editor.setPreview(null), [])
+  if (!d0) return <></>
+  const ok = (): void => {
+    editor.setPreview(null)
+    close()
+    A.selectColorRange(rgb(), o.fuzziness, o.invert, o.sampleAll, o.mode)
+  }
+  return (
+    <ClassicDialog
+      open
+      title="색상 범위"
+      onClose={close}
+      onEnter={ok}
+      width={440}
+      actions={
+        <>
+          <Button variant="outlined" onClick={close}>
+            취소
+          </Button>
+          <Button variant="contained" onClick={ok}>
+            확인
+          </Button>
+        </>
+      }
+    >
+      <GroupBox title="기준 색">
+        <Row label="색" labelWidth={90}>
+          <PaletteControl title="기준 색 (전경색이 기본)" value={o.color} onChange={(color) => setO({ ...o, color })} />
+          <Button variant="outlined" size="small" onClick={() => setO({ ...o, color: `#${editor.state.fg.map((v) => v.toString(16).padStart(2, '0')).join('')}` })}>
+            전경색
+          </Button>
+        </Row>
+        <SliderRow label="허용치" labelWidth={90} value={o.fuzziness} min={1} max={200} onChange={(fuzziness) => setO({ ...o, fuzziness })} />
+        <Lines>{['허용치가 클수록 비슷한 색을 넓게 잡습니다.', '스포이트(I)로 기준 색을 먼저 찍어 두면 편합니다.']}</Lines>
+      </GroupBox>
+      <GroupBox title="어디서">
+        <Check label="모든 레이어에서 (보이는 그대로)" checked={o.sampleAll} onChange={(sampleAll) => setO({ ...o, sampleAll })} />
+        <Check label="반전 (그 색이 아닌 곳)" checked={o.invert} onChange={(invert) => setO({ ...o, invert })} />
+        <Row label="지금 선택과" labelWidth={90}>
+          <Select
+            value={o.mode}
+            onChange={(e) => setO({ ...o, mode: e.target.value as SelectMode })}
+            sx={{ ...selectSx, width: 150 }}
+            SelectDisplayProps={{ 'aria-label': '선택 합치기' } as React.HTMLAttributes<HTMLDivElement>}
+          >
+            <MenuItem value="replace">바꾸기</MenuItem>
+            <MenuItem value="add">더하기</MenuItem>
+            <MenuItem value="subtract">빼기</MenuItem>
+            <MenuItem value="intersect">겹치는 곳만</MenuItem>
+          </Select>
+        </Row>
+      </GroupBox>
+    </ClassicDialog>
+  )
+}
+
 function RefineEdgeDialog(): JSX.Element {
   const d0 = useRef(editor.doc).current
   const [o, setO] = useState({ radius: 6, smooth: 0, feather: 0, contrast: 0, shift: 0, dim: true })
@@ -1024,11 +1133,17 @@ export default function DialogHost(): JSX.Element | null {
     case 'preferences':
       body = <PreferencesDialog />
       break
+    case 'brush':
+      body = <BrushDialog onClose={close} />
+      break
     case 'refineEdge':
       body = <RefineEdgeDialog />
       break
+    case 'colorRange':
+      body = <ColorRangeDialog />
+      break
     case 'moreAdjust':
-      body = <MoreAdjustHost which={dialog.which} />
+      body = <MoreAdjustHost which={dialog.which} layerId={dialog.layerId} />
       break
   }
   if (!body) {

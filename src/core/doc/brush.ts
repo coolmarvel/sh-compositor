@@ -20,6 +20,84 @@ export interface BrushSettings {
   pressureSize?: boolean
   /** 펜 필압 → 진하기 (한 점의 덮임에 곱함) */
   pressureOpacity?: boolean
+  /** 팁 모양 (v1.2 — 없으면 둥근 팁) */
+  tip?: BrushTip
+  /** 질감 (v1.2 — 없으면 없음): 덮임에 무늬를 곱한다 */
+  texture?: BrushTexture
+}
+
+export interface BrushTip {
+  shape: 'round' | 'square' | 'image'
+  /** 도 (시계 방향) */
+  angle: number
+  /** 0.05~1 — 1 이면 원, 작을수록 납작 */
+  roundness: number
+  /** 점 간격 = 지름 × spacing (없으면 경도에 따라 1.5~2.5%) */
+  spacing?: number
+  /** 흩뿌리기 0~1 (지름 배수) */
+  scatter?: number
+  /** 크기·불투명도 지터 0~1 */
+  sizeJitter?: number
+  opacityJitter?: number
+  /** shape=image: 알파 그림 (base64 PNG 가 아니라 원시 알파 — 저장은 base64) */
+  image?: TipImage
+}
+export interface TipImage {
+  width: number
+  height: number
+  /** 알파 0~255, width×height, base64 (JSON 저장용) */
+  alphaBase64: string
+}
+export interface BrushTexture {
+  width: number
+  height: number
+  /** 회색 0~255 (255 = 그대로, 0 = 안 칠함), base64 */
+  grayBase64: string
+  /** 배율 (1 = 원본 픽셀) */
+  scale: number
+  /** 0~1 */
+  strength: number
+}
+
+export const DEFAULT_TIP: BrushTip = { shape: 'round', angle: 0, roundness: 1, scatter: 0, sizeJitter: 0, opacityJitter: 0 }
+
+/** base64 ↔ 바이트 (브라우저·Node 공용) */
+export function bytesToBase64(b: Uint8Array): string {
+  if (typeof Buffer !== 'undefined') return Buffer.from(b).toString('base64')
+  let s = ''
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000))
+  return btoa(s)
+}
+export function base64ToBytes(s: string): Uint8Array {
+  if (typeof Buffer !== 'undefined') return new Uint8Array(Buffer.from(s, 'base64'))
+  const bin = atob(s)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+const decoded = new WeakMap<object, Uint8Array>()
+const bytesOf = (o: { alphaBase64?: string; grayBase64?: string }): Uint8Array => {
+  let b = decoded.get(o)
+  if (!b) {
+    b = base64ToBytes(o.alphaBase64 ?? o.grayBase64 ?? '')
+    decoded.set(o, b)
+  }
+  return b
+}
+/** 결정적 난수 (흩뿌리기·지터) — 같은 seed 면 같은 획 */
+function mulberry(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+/** 사각 팁의 덮임 — 체비쇼프 거리로 (모서리 1px 완화) */
+function squareAlpha(dx: number, dy: number, R: number, hardness: number): number {
+  return tipAlpha(Math.max(Math.abs(dx), Math.abs(dy)), R, hardness)
 }
 
 export const DEFAULT_BRUSH: BrushSettings = { size: 30, hardness: 0.8, opacity: 1, pressureSize: true, pressureOpacity: false }
@@ -31,7 +109,10 @@ export const BRUSH_PRESETS: { name: string; brush: Partial<BrushSettings> }[] = 
   { name: '딱딱한 연필', brush: { size: 3, hardness: 1, opacity: 1 } },
   { name: '마스크 다듬기', brush: { size: 60, hardness: 0.3, opacity: 1 } },
   { name: '잉크 펜 (필압 굵기)', brush: { size: 12, hardness: 0.95, opacity: 1, pressureSize: true, pressureOpacity: false } },
-  { name: '수채 (필압 진하기)', brush: { size: 50, hardness: 0.2, opacity: 0.8, pressureSize: false, pressureOpacity: true } }
+  { name: '수채 (필압 진하기)', brush: { size: 50, hardness: 0.2, opacity: 0.8, pressureSize: false, pressureOpacity: true } },
+  { name: '납작 마커 (사각 팁)', brush: { size: 24, hardness: 1, opacity: 1, tip: { shape: 'square', angle: 45, roundness: 0.35, spacing: 0.05 } } },
+  { name: '캘리그래피 펜', brush: { size: 20, hardness: 0.95, opacity: 1, pressureSize: true, tip: { shape: 'round', angle: 40, roundness: 0.2, spacing: 0.03 } } },
+  { name: '흩뿌리기 (스프레이)', brush: { size: 40, hardness: 0.5, opacity: 0.6, tip: { shape: 'round', angle: 0, roundness: 1, spacing: 0.15, scatter: 0.8, sizeJitter: 0.7, opacityJitter: 0.5 } } }
 ]
 
 /** 팁 한 점의 덮임 (d = 중심까지 거리, R = 반지름) */
@@ -46,7 +127,7 @@ export function tipAlpha(d: number, R: number, hardness: number): number {
   return 1 - t * t * (3 - 2 * t)
 }
 
-export const spacingFor = (s: BrushSettings): number => Math.max(0.5, s.size * (s.hardness >= 0.98 ? 0.015 : 0.025))
+export const spacingFor = (s: BrushSettings): number => Math.max(0.5, s.size * (s.tip?.spacing ?? (s.hardness >= 0.98 ? 0.015 : 0.025)))
 
 /** 한 획의 덮임 버퍼 (레이어 픽셀 크기) + 바뀐 영역 */
 export class StrokeCoverage {
@@ -55,32 +136,74 @@ export class StrokeCoverage {
   private last: { x: number; y: number; p: number } | null = null
   private carry = 0
 
+  private rand: () => number
   constructor(
     readonly width: number,
     readonly height: number,
-    readonly settings: BrushSettings
+    readonly settings: BrushSettings,
+    seed = 7
   ) {
     this.cov = new Float32Array(width * height)
+    this.rand = mulberry(seed)
   }
 
   /** 점 하나 찍기 */
   dab(cx: number, cy: number, pressure = 1): void {
     const ps = this.settings.pressureSize !== false ? pressure : 1
-    const po = this.settings.pressureOpacity ? pressure : 1
-    const R = Math.max(0.5, (this.settings.size * ps) / 2)
+    let po = this.settings.pressureOpacity ? pressure : 1
+    const tip = this.settings.tip
+    let size = this.settings.size * ps
+    if (tip) {
+      if (tip.scatter) {
+        cx += (this.rand() * 2 - 1) * tip.scatter * this.settings.size
+        cy += (this.rand() * 2 - 1) * tip.scatter * this.settings.size
+      }
+      if (tip.sizeJitter) size *= 1 - this.rand() * tip.sizeJitter
+      if (tip.opacityJitter) po *= 1 - this.rand() * tip.opacityJitter
+    }
+    const R = Math.max(0.5, size / 2)
+    // 회전·납작한 팁은 원보다 클 수 없다 → 경계는 R 로 충분
     const x0 = Math.max(0, Math.floor(cx - R - 1))
     const y0 = Math.max(0, Math.floor(cy - R - 1))
     const x1 = Math.min(this.width - 1, Math.ceil(cx + R + 1))
     const y1 = Math.min(this.height - 1, Math.ceil(cy + R + 1))
     if (x1 < x0 || y1 < y0) return
     const h = this.settings.hardness
+    const shaped = !!tip && (tip.shape !== 'round' || tip.angle !== 0 || tip.roundness < 1)
+    const cos = shaped ? Math.cos((-tip!.angle * Math.PI) / 180) : 1
+    const sin = shaped ? Math.sin((-tip!.angle * Math.PI) / 180) : 0
+    const ry = shaped ? 1 / Math.max(0.05, tip!.roundness) : 1
+    const img = tip?.shape === 'image' && tip.image ? tip.image : null
+    const imgA = img ? bytesOf(img) : null
+    const tex = this.settings.texture
+    const texG = tex ? bytesOf(tex) : null
     for (let y = y0; y <= y1; y++) {
       const dy = y + 0.5 - cy
       const row = y * this.width
       for (let x = x0; x <= x1; x++) {
         const dx = x + 0.5 - cx
-        const a = tipAlpha(Math.sqrt(dx * dx + dy * dy), R, h) * po
+        let a: number
+        if (!shaped) a = tipAlpha(Math.sqrt(dx * dx + dy * dy), R, h)
+        else {
+          // 팁 좌표로 (회전 되돌리고 납작함 펴기)
+          const lx = dx * cos - dy * sin
+          const ly = (dx * sin + dy * cos) * ry
+          if (img && imgA) {
+            const u = ((lx / R + 1) / 2) * img.width
+            const v = ((ly / R + 1) / 2) * img.height
+            if (u < 0 || v < 0 || u >= img.width || v >= img.height) continue
+            a = imgA[(v | 0) * img.width + (u | 0)] / 255
+          } else if (tip!.shape === 'square') a = squareAlpha(lx, ly, R, h)
+          else a = tipAlpha(Math.sqrt(lx * lx + ly * ly), R, h)
+        }
+        a *= po
         if (a <= 0) continue
+        if (tex && texG) {
+          const tx = Math.floor(x / tex.scale) % tex.width
+          const ty = Math.floor(y / tex.scale) % tex.height
+          const t = texG[((ty + tex.height) % tex.height) * tex.width + ((tx + tex.width) % tex.width)] / 255
+          a *= 1 - tex.strength * (1 - t)
+        }
         const i = row + x
         this.cov[i] = this.cov[i] + (1 - this.cov[i]) * a
       }

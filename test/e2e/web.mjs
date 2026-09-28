@@ -402,7 +402,7 @@ async function main() {
     }
     // W13: WASM 을 못 받으면 TS 기준 경로로 리터칭
     {
-      const { context, page, errors } = await open([NO_PICKERS], { route: (p) => p.route(/retouch.*\.wasm/, (r) => r.abort()), allowErrors: /retouch|Failed to load resource/i })
+      const { context, page, errors } = await open([NO_PICKERS], { route: (p) => p.route(/(retouch|kernels).*\.wasm/, (r) => r.abort()), allowErrors: /retouch|kernels|Failed to load resource/i })
       await t('W13 WASM 로딩 실패 → TS 폴백으로 흐림 도구 동작', async () => {
         assert((await page.evaluate(() => window.__sc.retouchReady)) === false, 'wasm should have failed')
         await newDoc(page, 200, 150)

@@ -6,8 +6,9 @@ import type { ToolHandler } from './types'
 import { moveTool } from './move'
 import { marqueeTool, lassoTool, wandTool } from './select'
 import { objectSelectTool } from './objectSelect'
-import { brushTool, blurTool, cloneTool, healTool } from './paint'
+import { brushTool, blurTool, cloneTool, healTool, toneTool } from './paint'
 import { cropTool, gradientTool, shapeTool, typeTool, eyedropperTool, handTool, zoomTool } from './misc'
+import { penTool } from './pen'
 
 export interface ToolInfo {
   key: Tool
@@ -100,6 +101,22 @@ export const TOOLS: ToolInfo[] = [
     desc: '칠한 곳을 흐리게 하거나, 문지르거나, 밀어서 모양을 바꿉니다.',
     hint: '끌어서 흐리게·문지르기·밀기를 합니다. [ ]로 크기, 숫자로 강도를 바꿉니다.',
     handler: blurTool
+  },
+  {
+    key: 'dodge',
+    label: '닷지·번·스펀지',
+    shortcut: 'O',
+    desc: '칠한 곳을 밝게(닷지) 하거나 어둡게(번) 하거나, 채도를 높이거나 낮춥니다(스펀지).',
+    hint: '끌어서 밝게·어둡게·채도를 바꿉니다. 옵션 줄에서 어두운 곳·중간·밝은 곳 범위와 노출을 고릅니다. [ ]로 크기, 숫자로 노출을 바꿉니다.',
+    handler: toneTool
+  },
+  {
+    key: 'pen',
+    label: '펜 (패스)',
+    shortcut: 'P',
+    desc: '클릭과 끌기로 베지어 패스를 그립니다. 패스 패널에서 선택·채우기·선·벡터 마스크로 씁니다.',
+    hint: '클릭은 꼭짓점, 끌면 곡선입니다. 첫 앵커를 다시 누르면 닫힙니다. 앵커·핸들은 끌어서 옮기고 Ctrl+클릭은 곡선과 꼭짓점을 바꿉니다. Backspace 는 지우기, Enter 는 열린 채 끝, Esc 는 취소입니다.',
+    handler: penTool
   },
   {
     key: 'gradient',

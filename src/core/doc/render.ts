@@ -10,9 +10,11 @@
  *  - 조정 레이어 = 지금까지 쌓인 아래 그림에 보정을 걸고, 불투명도·마스크(·클리핑)만큼 섞는다.
  */
 import { compositePixel } from './blend'
+import { effectiveMask } from './path'
 import { layerMatrix, invertAffine, transformBounds } from './transform'
 import type { Bitmap, Doc, Layer } from './types'
 import { applyAdjustments } from '../adjust'
+import { applyMoreAdjust } from '../adjust2'
 import { applyFilters, hasFilters } from '../filters'
 import { renderEffects, hasEffects } from '../effects'
 
@@ -149,7 +151,7 @@ export function rasterizeBitmap(bitmap: Bitmap, layer: Pick<Layer, 'transform'>,
 
 /** 마스크(회색 비트맵, 레이어 변형을 따라감)를 래스터 알파에 곱한다 (in place) */
 function applyMask(r: Raster, layer: Layer, docW: number, docH: number): void {
-  const m = layer.mask
+  const m = effectiveMask(layer, docW, docH)
   if (!m || !m.enabled) return
   const mr = rasterizeBitmap(m.bitmap, layer, docW, docH)
   for (let y = 0; y < r.height; y++) {
@@ -216,9 +218,11 @@ function applyAdjustmentLayer(dst: Uint8ClampedArray, docW: number, docH: number
   if (!adj) return
   let adjusted: Uint8ClampedArray = dst.slice()
   applyAdjustments(adjusted, adj.settings, 7)
+  if (adj.more) applyMoreAdjust(adjusted, adj.more)
   if (adj.filters && hasFilters(adj.filters)) adjusted = applyFilters(adjusted, docW, docH, adj.filters, 7, 'clamp')
   // 마스크: 조정 레이어의 마스크는 문서 크기 회색 비트맵 (변형 = 문서 전체)
-  const mask = layer.mask?.enabled ? rasterizeBitmap(layer.mask.bitmap, layer, docW, docH) : null
+  const em = effectiveMask(layer, docW, docH)
+  const mask = em?.enabled ? rasterizeBitmap(em.bitmap, layer, docW, docH) : null
   for (let i = 0, p = 0; i < dst.length; i += 4, p++) {
     let k = layer.opacity
     if (coverage) k *= coverage[p]
@@ -269,7 +273,7 @@ function compositeChildren(doc: Doc, parentId: string | null, dst: Uint8ClampedA
       const inner = new Uint8ClampedArray(W * H * 4)
       compositeChildren(doc, layer.id, inner, skip)
       const r: Raster = { x: 0, y: 0, width: W, height: H, data: inner }
-      if (layer.mask?.enabled) applyMask(r, { ...layer, transform: { x: 0, y: 0, width: W, height: H, rotation: 0, flipH: false, flipV: false } }, W, H)
+      if (layer.mask?.enabled || layer.vectorMask?.enabled) applyMask(r, { ...layer, transform: { x: 0, y: 0, width: W, height: H, rotation: 0, flipH: false, flipV: false } }, W, H)
       compositeRaster(dst, W, H, r, layer, clipCov)
       if (needsBase) base = alphaCoverage(r, W, H)
       continue

@@ -1,7 +1,7 @@
 /**
  * HTTP 서버 — 업로드·다운로드(자산)와 원격 MCP(Streamable HTTP, `/mcp`). 브라우저를 띄우지 않는다.
  *
- *  POST /v1/assets        PNG 원문 업로드 (Content-Type: image/png, 선택 X-Filename) → AssetInfo
+ *  POST /v1/assets        PNG·JPEG·PSD·.shcomp 원문 업로드 (Content-Type 은 그림·zip·octet-stream 계열, 형식은 내용으로 판정, 선택 X-Filename) → AssetInfo
  *  GET  /v1/assets/:id    자신의 업로드·결과 파일 내려받기
  *  POST|GET|DELETE /mcp   MCP (stateless — 요청마다 서버·전송을 새로 만든다. 문서 수명은 MCP 세션과 무관)
  *  GET  /healthz          상태
@@ -19,6 +19,7 @@ import type { ServerConfig } from './config'
 import { TokenAuth } from './auth'
 import { createMcpServer } from './mcp'
 
+const UPLOAD_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/vnd.adobe.photoshop', 'image/x-photoshop', 'application/x-photoshop', 'application/zip', 'application/octet-stream'])
 const STATUS: Record<ErrorCode, number> = {
   INVALID_INPUT: 400,
   NOT_FOUND: 404,
@@ -126,8 +127,13 @@ export function createHttpApp(config: ServerConfig, service: DocumentService, lo
       owner = principal.owner
 
       if (url.pathname === '/v1/assets' && req.method === 'POST') {
+        // 형식은 내용으로 판정한다 (codecs.sniff). Content-Type 은 그림·PSD·zip·바이너리 계열이면 받는다
         const type = (req.headers['content-type'] ?? '').split(';')[0].trim()
-        if (type !== 'image/png') throw new CommandError('UNSUPPORTED_CAPABILITY', '지금은 image/png 만 올릴 수 있습니다.')
+        if (!UPLOAD_TYPES.has(type))
+          throw new CommandError(
+            'UNSUPPORTED_CAPABILITY',
+            `Content-Type ${type || '(없음)'} 은 받지 않습니다. image/png·image/jpeg·image/vnd.adobe.photoshop·application/zip·application/octet-stream 으로 올리세요.`
+          )
         const bytes = await readBody(req, service.limits.maxUploadBytes)
         let name = String(req.headers['x-filename'] ?? 'upload.png')
         try {

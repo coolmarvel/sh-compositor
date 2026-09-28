@@ -5,7 +5,8 @@
 import { editor } from './store'
 import { bakeLayer, editPixels, fillSelection, eraseSelection, adjustLayer, layerViaCopy, selWeight, pixelsLocked } from './pixels'
 import { copyToClipboard, mergedBitmap } from './io'
-import { capture, land, currentDoc } from './commandBridge'
+import { capture, land, currentDoc, runCommand } from './commandBridge'
+import { pathToSelectionCommand, pathFillCommand, pathStrokeCommand, pathDeleteCommand, layerVectorMaskCommand } from '../../../application/commands/index'
 import {
   getLayer,
   updateLayer,
@@ -33,6 +34,9 @@ import {
   growSelection,
   featherSelection,
   makeSelection,
+  combine,
+  colorRangeMask,
+  type SelectMode,
   rasterizeLayer,
   histogram,
   autoLevelsFor,
@@ -44,12 +48,15 @@ import {
   isEffectivelyVisible,
   DEFAULT_ADJUST,
   ADJUSTMENT_KINDS,
+  MORE_ADJUSTMENT_KINDS,
   type AdjustmentKind,
+  type MoreAdjustKind,
   type AutoLevelsMode,
   type Adjustments,
   type Doc,
   type Layer,
-  type MatteRefine
+  type MatteRefine,
+  type BrushSettings
 } from '@core/index'
 
 type BgOptions = { engine: 'offline' | 'online'; model?: 'isnet_fp16' | 'isnet' }
@@ -396,6 +403,22 @@ export async function selectSubject(): Promise<void> {
   })
 }
 
+/** 선택 ▸ 색상 범위 — 기준 색과 비슷한 곳을 선택 (보이는 그대로 또는 활성 레이어) */
+export function selectColorRange(color: [number, number, number], fuzziness: number, invert: boolean, sampleAll: boolean, mode: SelectMode = 'replace'): void {
+  const d = doc()
+  if (!d) return
+  let rgba: Uint8ClampedArray
+  if (sampleAll) rgba = mergedBitmap(d).data
+  else {
+    const l = getLayer(d, d.activeId)
+    if (!l?.bitmap) return editor.toast('info', '색을 볼 픽셀 레이어를 고르거나 "모든 레이어에서" 를 켜세요.')
+    rgba = mergedBitmap({ ...d, selection: null, layers: [{ ...l, parentId: null, clip: false, visible: true, blend: 'normal', opacity: 1 }] }).data
+  }
+  const sel = combine(d.selection, d.width, d.height, colorRangeMask(rgba, d.width, d.height, color, fuzziness, invert), mode)
+  if (!sel?.bounds) return editor.toast('info', '그 색과 비슷한 곳이 없습니다. 허용치를 올려 보세요.')
+  editor.commit({ ...d, selection: sel }, '색상 범위 선택')
+}
+
 // ── 레이어 ──
 export function newLayer(): void {
   const d = doc()
@@ -407,6 +430,7 @@ export function newAdjustmentLayer(kind: AdjustmentKind): void {
   const label = ADJUSTMENT_KINDS.find((k) => k.key === kind)?.label ?? '조정'
   const next = addAdjustmentLayer(d, kind, label)
   editor.commit(next, `${label} 조정 레이어`)
+  if (MORE_ADJUSTMENT_KINDS.includes(kind)) return editor.set({ dialog: { kind: 'moreAdjust', which: kind as MoreAdjustKind, layerId: next.activeId! } })
   const tab = kind === 'curves' ? 'curves' : kind === 'hueSaturation' ? 'hsl' : kind === 'exposure' ? 'exposure' : kind === 'levels' ? 'levels' : 'effects'
   if (kind !== 'invert') editor.set({ dialog: { kind: 'adjust', tab, layerId: next.activeId! } })
 }
@@ -674,4 +698,47 @@ export function clearLayerStyle(): void {
   let out = d
   for (const id of editor.state.selectedIds) if (getLayer(out, id)?.effects) out = updateLayer(out, id, { effects: null })
   if (out !== d) editor.commit(out, '레이어 효과 지우기')
+}
+
+// ── 패스 (펜 도구·패스 패널) — application 명령을 그대로 쓴다 ──
+export function pathToSelection(pathId: string, mode: SelectMode): void {
+  runCommand(pathToSelectionCommand, { pathId, mode })
+}
+export function fillPath(pathId: string): void {
+  const d = doc()
+  if (!d) return
+  const l = pixelLayer(d, '패스 채우기')
+  if (!l) return
+  runCommand(pathFillCommand, { pathId, layerId: l.id, color: hexOf(editor.state.fg) })
+}
+export function strokePath(pathId: string): void {
+  const d = doc()
+  if (!d) return
+  const l = pixelLayer(d, '패스 선 그리기')
+  if (!l) return
+  const b = editor.state.settings.brush
+  runCommand(pathStrokeCommand, { pathId, layerId: l.id, color: hexOf(editor.state.fg), brush: stripTip(b), mode: editor.state.settings.brushMode })
+}
+export function setVectorMask(pathId: string): void {
+  const d = doc()
+  const l = d && getLayer(d, d.activeId)
+  if (!d || !l) return editor.toast('info', '벡터 마스크를 붙일 레이어를 고르세요.')
+  runCommand(layerVectorMaskCommand, { layerId: l.id, pathId })
+}
+export function removeVectorMask(): void {
+  const d = doc()
+  const l = d && getLayer(d, d.activeId)
+  if (!d || !l?.vectorMask) return
+  runCommand(layerVectorMaskCommand, { layerId: l.id, pathId: null })
+}
+export function deletePath(pathId: string): void {
+  if (runCommand(pathDeleteCommand, { pathId })) editor.set({ activePathId: null })
+}
+const hexOf = (c: [number, number, number]): string => '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('')
+/** 명령 입력에는 그림 팁·질감을 싣지 않는다 (편집기 붓 설정 → 명령용) */
+function stripTip(b: BrushSettings): Record<string, unknown> {
+  const out: Record<string, unknown> = { size: b.size, hardness: b.hardness, opacity: b.opacity, pressureSize: b.pressureSize, pressureOpacity: b.pressureOpacity }
+  if (b.tip && b.tip.shape !== 'image')
+    out.tip = { shape: b.tip.shape, angle: b.tip.angle, roundness: b.tip.roundness, spacing: b.tip.spacing, scatter: b.tip.scatter, sizeJitter: b.tip.sizeJitter, opacityJitter: b.tip.opacityJitter }
+  return out
 }

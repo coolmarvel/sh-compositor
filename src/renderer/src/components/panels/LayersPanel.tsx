@@ -513,6 +513,7 @@ export default function LayersPanel(): JSX.Element {
 export function openAdjustmentEditor(l: Layer): void {
   const k = l.adjustment?.kind
   if (!k || k === 'invert') return
+  if (l.adjustment?.more) return editor.set({ dialog: { kind: 'moreAdjust', which: l.adjustment.more.kind, layerId: l.id } })
   const tab = k === 'curves' ? 'curves' : k === 'hueSaturation' ? 'hsl' : k === 'exposure' ? 'exposure' : k === 'levels' ? 'levels' : 'effects'
   editor.set({ dialog: { kind: 'adjust', tab, layerId: l.id } })
 }

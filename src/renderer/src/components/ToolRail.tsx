@@ -13,12 +13,14 @@ import HealingRounded from '@mui/icons-material/HealingRounded'
 import ContentCopyRounded from '@mui/icons-material/ContentCopyRounded'
 import WaterDropOutlined from '@mui/icons-material/WaterDropOutlined'
 import GradientRounded from '@mui/icons-material/GradientRounded'
+import TimelineRounded from '@mui/icons-material/TimelineRounded'
 import CategoryOutlined from '@mui/icons-material/CategoryOutlined'
 import TitleRounded from '@mui/icons-material/TitleRounded'
 import ColorizeRounded from '@mui/icons-material/ColorizeRounded'
 import PanToolOutlined from '@mui/icons-material/PanToolOutlined'
 import ZoomInRounded from '@mui/icons-material/ZoomInRounded'
 import SwapVertRounded from '@mui/icons-material/SwapVertRounded'
+import Brightness6Rounded from '@mui/icons-material/Brightness6Rounded'
 import { editor, useEditor, type Tool } from '../editor/store'
 import { TOOLS } from '../tools'
 import { ui } from '../theme'
@@ -36,7 +38,9 @@ const ICONS: Record<string, JSX.Element> = {
   spotHealing: <HealingRounded />,
   cloneStamp: <ContentCopyRounded />,
   blur: <WaterDropOutlined />,
+  dodge: <Brightness6Rounded />,
   gradient: <GradientRounded />,
+  pen: <TimelineRounded />,
   shape: <CategoryOutlined />,
   type: <TitleRounded />,
   eyedropper: <ColorizeRounded />,

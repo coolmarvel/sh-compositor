@@ -186,10 +186,10 @@ async function main() {
     })
     const alice = await connect('alice')
     clients.push(alice)
-    await t('M3 초기화·tools/list: 도구 51개와 입력 스키마, 프로토콜 버전 고정', async () => {
+    await t('M3 초기화·tools/list: 도구 58개와 입력 스키마, 프로토콜 버전 고정', async () => {
       const { tools } = await alice.listTools()
       const names = tools.map((x) => x.name).sort()
-      assert(names.length === 51, names.join(','))
+      assert(names.length === 58, names.join(','))
       for (const n of ['compositor_document_create', 'compositor_image_resize', 'compositor_filter_apply', 'compositor_export', 'compositor_job_get', 'compositor_job_cancel'])
         assert(names.includes(n), `missing ${n}`)
       const resize = tools.find((x) => x.name === 'compositor_image_resize')
@@ -292,7 +292,7 @@ async function main() {
       const u = await call(alice, 'compositor_document_undo', { docId: doc.docId, expectedRevision: cur.revision + 1, operationId: 'm10-undo' })
       assert(u.status === 'succeeded' && u.result.revision === cur.revision + 2, JSON.stringify(u.error ?? u))
     })
-    // 느린 작업: 2200×2200 중간값(반경 10) — 작업 스레드에서 6초 이상 (기한 2.5초보다 충분히 길게)
+    // 느린 작업: 2200×2200 모션 블러(60px) — 작업 스레드에서 10초 이상 (기한 2.5초보다 충분히 길게. v1.2 에서 중간값이 Rust 로 빨라져 바꿈)
     const slowDoc = await call(alice, 'compositor_document_create', { width: 2200, height: 2200, name: 'slow' })
     const slowLayer = (await call(alice, 'compositor_layer_list', { docId: slowDoc.docId })).layers[0].id
     await t('M11 취소: 도는 작업을 취소하면 커밋되지 않고 작업 스레드가 정리된다', async () => {
@@ -301,8 +301,8 @@ async function main() {
         expectedRevision: 1,
         operationId: 'm11',
         layerId: slowLayer,
-        filter: 'median',
-        params: { radius: 10 },
+        filter: 'motionBlur',
+        params: { distance: 60, angle: 30 },
         waitMs: 0
       })
       assert(started.status === 'running' || started.status === 'queued', JSON.stringify(started.error ?? started))
@@ -323,8 +323,8 @@ async function main() {
         expectedRevision: 1,
         operationId: 'm12',
         layerId: slowLayer,
-        filter: 'median',
-        params: { radius: 10 },
+        filter: 'motionBlur',
+        params: { distance: 60, angle: 30 },
         waitMs: 0
       })
       const done = await call(alice, 'compositor_job_get', { jobId: started.jobId, waitMs: 15000 })
@@ -370,7 +370,10 @@ async function main() {
     let D, bgL
     await t('M16 문서 만들기·목록·이름·정보·기능 목록', async () => {
       const caps = await tool('compositor_capabilities', {})
-      assert(caps.commands.length === 36 && caps.importFormats.includes('psd') && caps.exportFormats.includes('psd'), JSON.stringify(caps.commands.length))
+      assert(
+        caps.commands.length === 43 && caps.exportFormats.includes('jpeg') && caps.importFormats.includes('jpeg') && caps.importFormats.includes('psd') && caps.exportFormats.includes('psd'),
+        JSON.stringify(caps.commands.length)
+      )
       const d = await tool('compositor_document_create', { width: 60, height: 40, background: 'white', name: 'all' })
       D = d.docId
       rev = d.revision
@@ -522,6 +525,144 @@ async function main() {
       await mut('compositor_shape_add', D, { kind: 'line', x: 0, y: 39, width: 59, height: 0, stroke: '#000000', strokeWidth: 2 })
       await mut('compositor_layer_merge', D, { mode: 'visible' })
     })
+    await t('M19b v1.2: 닷지·번·스펀지, 붓 팁, 색상 범위 선택, 퀵 마스크(선택에 붓), 그라데이션 오버레이·경사와 엠보스, 조정 레이어 5종', async () => {
+      const l = (await tool('compositor_layer_list', { docId: D })).layers[0].id
+      await mut('compositor_pixels_fill', D, { layerId: l, color: '#808080' })
+      const mid = [
+        { x: 10, y: 20 },
+        { x: 50, y: 20 }
+      ]
+      await mut('compositor_tone_stroke', D, { layerId: l, points: mid, mode: 'dodge', range: 'midtones', exposure: 80, brush: { size: 10, hardness: 1 } })
+      let p = await pixels(D)
+      assert(p.px(30, 20)[0] > 135, `dodge ${p.px(30, 20)}`)
+      await mut('compositor_tone_stroke', D, { layerId: l, points: mid, mode: 'burn', range: 'highlights', exposure: 100, brush: { size: 10, hardness: 1 } })
+      await mut('compositor_tone_stroke', D, { layerId: l, points: mid, mode: 'sponge', saturate: false, brush: { size: 10 } })
+      p = await pixels(D)
+      assert(p.px(30, 20)[0] < 128, `burn ${p.px(30, 20)}`)
+      // 붓 팁: 납작·회전·흩뿌리기 (seed 고정 → 같은 결과)
+      await mut('compositor_pixels_fill', D, { layerId: l, color: '#ffffff' })
+      const tipArgs = {
+        layerId: l,
+        points: mid,
+        color: '#000000',
+        brush: { size: 8, hardness: 1, tip: { shape: 'square', angle: 45, roundness: 0.5, spacing: 0.2, scatter: 0.3, sizeJitter: 0.2 }, seed: 5 }
+      }
+      await mut('compositor_brush_stroke', D, tipArgs)
+      const a = await pixels(D)
+      await mut('compositor_pixels_fill', D, { layerId: l, color: '#ffffff' })
+      await mut('compositor_brush_stroke', D, tipArgs)
+      const b = await pixels(D)
+      assert(a.px(30, 20)[0] < 128 && a.px(30, 20).join() === b.px(30, 20).join(), `tip ${a.px(30, 20)} ${b.px(30, 20)}`)
+      // 색상 범위: 왼쪽 반 빨강 → 빨강 근처만 선택
+      await mut('compositor_selection_set', D, { shape: 'rect', x: 0, y: 0, width: 30, height: 40 })
+      await mut('compositor_pixels_fill', D, { layerId: l, color: '#ff0000' })
+      await mut('compositor_selection_set', D, { shape: 'none' })
+      await mut('compositor_selection_set', D, { shape: 'colorRange', color: '#ff2020', fuzziness: 60, layerId: l })
+      let sel = (await tool('compositor_document_get', { docId: D })).selection
+      assert(sel && sel.w <= 31 && sel.x === 0, `colorRange ${JSON.stringify(sel)}`)
+      // 퀵 마스크: 선택에 붓으로 더하기·빼기
+      await mut('compositor_brush_stroke', D, { layerId: l, target: 'selection', mode: 'paint', points: [{ x: 45, y: 20 }], brush: { size: 10, hardness: 1 } })
+      sel = (await tool('compositor_document_get', { docId: D })).selection
+      assert(sel.x + sel.w >= 49, `quick mask add ${JSON.stringify(sel)}`)
+      await mut('compositor_brush_stroke', D, { layerId: l, target: 'selection', mode: 'erase', points: [{ x: 45, y: 20 }], brush: { size: 12, hardness: 1 } })
+      await mut('compositor_selection_set', D, { shape: 'none' })
+      // 그라데이션 오버레이·경사와 엠보스
+      await mut('compositor_layer_update', D, {
+        layerId: l,
+        effects: { gradientOverlay: { enabled: true, angle: 0, colors: ['#0000ff', '#00ff00'], opacity: 1 }, bevel: { enabled: true, style: 'inner', size: 3, depth: 200 } }
+      })
+      p = await pixels(D)
+      assert(p.px(4, 20)[2] > 150 && p.px(50, 20)[1] > 120 && p.px(50, 20)[2] < 120, `gradient overlay ${p.px(4, 20)} ${p.px(50, 20)}`)
+      const fx = (await tool('compositor_layer_list', { docId: D })).layers.find((x) => x.id === l).effects
+      assert(fx.includes('gradientOverlay') && fx.includes('bevel'), JSON.stringify(fx))
+      await mut('compositor_layer_update', D, { layerId: l, effects: { gradientOverlay: { enabled: false }, bevel: { enabled: false } } })
+      // 조정 레이어 5종 (더하기·설정·삭제) — 한계값이 맨 위면 결과는 흑백
+      await mut('compositor_pixels_fill', D, { layerId: l, color: '#8040c0' })
+      const kinds = ['blackWhite', 'colorBalance', 'vibrance', 'posterize', 'threshold']
+      const adjIds = []
+      for (const k of kinds) {
+        await mut('compositor_layer_add', D, { kind: 'adjustment', adjustmentKind: k, name: k })
+        adjIds.push((await tool('compositor_layer_list', { docId: D })).layers.at(-1).id)
+      }
+      await mut('compositor_layer_update', D, { layerId: adjIds[4], more: { threshold: 200 } })
+      await mut('compositor_layer_update', D, { layerId: adjIds[2], more: { vibrance: 50 } })
+      p = await pixels(D)
+      const v = p.px(30, 20)
+      assert((v[0] === 0 || v[0] === 255) && v[0] === v[1] && v[1] === v[2], `threshold layer ${v}`)
+      await mut('compositor_layer_update', D, { layerId: adjIds[4], visible: false })
+      p = await pixels(D)
+      // 한계값을 끄면 흑백·포스터화만 남는다 (0·255 만이 아닌 회색 단계)
+      assert(!p.px(30, 20).slice(0, 3).every((c) => c === 0 || c === 255), `adjust stack ${p.px(30, 20)}`)
+      const psd = await tool('compositor_export', { docId: D, format: 'psd' })
+      const bytes = Buffer.from(await (await fetch(psd.downloadUrl, { headers: { Authorization: `Bearer ${TOKENS.alice}` } })).arrayBuffer())
+      const up = await fetch(`${BASE}/v1/assets`, { method: 'POST', headers: { Authorization: `Bearer ${TOKENS.alice}`, 'Content-Type': 'image/png', 'X-Filename': 'adj.psd' }, body: bytes })
+      const back = await tool('compositor_document_import', { assetId: (await up.json()).id })
+      const kindsBack = (await tool('compositor_layer_list', { docId: back.docId })).layers.filter((x) => x.kind === 'adjustment').map((x) => x.adjustmentKind ?? x.name)
+      assert(kindsBack.length === 5, `psd adjustment layers ${JSON.stringify(kindsBack)}`)
+      await tool('compositor_document_delete', { docId: back.docId })
+      await mut('compositor_layer_delete', D, { layerIds: adjIds })
+      // JPEG 내보내기 → 다시 가져오기
+      const jx = await tool('compositor_export', { docId: D, format: 'jpeg' })
+      const jb = Buffer.from(await (await fetch(jx.downloadUrl, { headers: { Authorization: `Bearer ${TOKENS.alice}` } })).arrayBuffer())
+      assert(jb[0] === 0xff && jb[1] === 0xd8, 'not a jpeg')
+      const jup = await fetch(`${BASE}/v1/assets`, { method: 'POST', headers: { Authorization: `Bearer ${TOKENS.alice}`, 'Content-Type': 'image/jpeg', 'X-Filename': 'x.jpg' }, body: jb })
+      assert(jup.status === 201, `jpeg upload ${jup.status}`)
+      const jdoc = await tool('compositor_document_import', { assetId: (await jup.json()).id })
+      assert(jdoc.width === 60 && jdoc.height === 40, JSON.stringify(jdoc))
+      await tool('compositor_document_delete', { docId: jdoc.docId })
+    })
+    await t('M19c 패스: 만들기·고치기·선택으로·채우기·붓으로·벡터 마스크·지우기', async () => {
+      const l = (await tool('compositor_layer_list', { docId: D })).layers[0].id
+      await mut('compositor_pixels_fill', D, { layerId: l, color: '#ffffff' })
+      const tri = [
+        {
+          closed: true,
+          anchors: [
+            { x: 5, y: 5 },
+            { x: 55, y: 5 },
+            { x: 30, y: 35 }
+          ]
+        }
+      ]
+      const made = await mut('compositor_path_set', D, { name: 'tri', subpaths: tri })
+      const pathId = /\(([^)]+)\)/.exec(made.result.summary)[1]
+      assert((await tool('compositor_document_get', { docId: D })).paths?.length === 1, 'paths in info')
+      await mut('compositor_path_set', D, {
+        pathId,
+        subpaths: [
+          {
+            closed: true,
+            anchors: [
+              { x: 5, y: 5, out: { x: 30, y: -10 } },
+              { x: 55, y: 5, in: { x: 30, y: -10 } },
+              { x: 30, y: 35 }
+            ]
+          }
+        ]
+      })
+      await mut('compositor_path_to_selection', D, { pathId, mode: 'replace' })
+      const sel = (await tool('compositor_document_get', { docId: D })).selection
+      assert(sel && sel.x <= 5 && sel.w >= 45, `path selection ${JSON.stringify(sel)}`)
+      await mut('compositor_selection_set', D, { shape: 'none' })
+      await mut('compositor_path_fill', D, { pathId, layerId: l, color: '#ff0000' })
+      let p = await pixels(D)
+      assert(near(p.px(30, 12), [255, 0, 0, 255]) && near(p.px(2, 38), [255, 255, 255, 255]), `path fill ${p.px(30, 12)} ${p.px(2, 38)}`)
+      await mut('compositor_path_stroke', D, { pathId, layerId: l, color: '#0000ff', brush: { size: 4, hardness: 1 } })
+      p = await pixels(D)
+      assert(p.px(30, 35)[2] > 150 && p.px(30, 35)[0] < 100, `path stroke ${p.px(30, 35)}`)
+      await mut('compositor_layer_vector_mask', D, { layerId: l, pathId })
+      const info = (await tool('compositor_layer_list', { docId: D })).layers.find((x) => x.id === l)
+      assert(info.hasVectorMask === true, JSON.stringify(info))
+      p = await pixels(D)
+      assert(p.px(2, 38)[3] === 0 && p.px(30, 12)[3] === 255, `vector mask ${p.px(2, 38)} ${p.px(30, 12)}`)
+      await mut('compositor_layer_vector_mask', D, { layerId: l, pathId, inverted: true })
+      p = await pixels(D)
+      assert(p.px(2, 38)[3] === 255 && p.px(30, 12)[3] === 0, `inverted vector mask ${p.px(2, 38)} ${p.px(30, 12)}`)
+      await mut('compositor_layer_vector_mask', D, { layerId: l, pathId: null })
+      await mut('compositor_path_delete', D, { pathId })
+      assert(!(await tool('compositor_document_get', { docId: D })).paths?.length, 'path deleted')
+      await mut('compositor_pixels_fill', D, { layerId: l, color: '#ffffff' })
+    })
     await t('M20 보정·빠른 보정·흑백 등·필터·히스토그램', async () => {
       const l = (await tool('compositor_layer_list', { docId: D })).layers[0].id
       await mut('compositor_pixels_fill', D, { layerId: l, color: '#8040c0' })
@@ -627,10 +768,10 @@ async function main() {
       assert(c.status === 'succeeded', 'cancel of finished job keeps status')
       await tool('compositor_document_delete', { docId: D })
     })
-    await t('M23 도구 51개를 모두 불렀다', async () => {
+    await t('M23 도구 58개를 모두 불렀다', async () => {
       const { tools } = await alice.listTools()
       const missing = tools.map((x) => x.name).filter((n) => !called.has(n))
-      assert(tools.length === 51 && missing.length === 0, `${tools.length} tools, uncalled: ${missing.join(', ')}`)
+      assert(tools.length === 58 && missing.length === 0, `${tools.length} tools, uncalled: ${missing.join(', ')}`)
     })
   } finally {
     for (const c of clients) await c.close().catch(() => {})
@@ -671,6 +812,7 @@ async function main() {
   const fail = results.filter((r) => !r.ok)
   console.log(`\n${results.length - fail.length}/${results.length} passed`)
   for (const f of fail) console.log(`  ✗ ${f.name}: ${f.err}`)
+  if (fail.length) for (const line of serverLog.split('\n').filter((l) => l.includes('"level":"error"'))) console.log('  [server]', line.slice(0, 600))
   fs.rmSync(WORK, { recursive: true, force: true })
   process.exit(fail.length ? 1 : 0)
 }

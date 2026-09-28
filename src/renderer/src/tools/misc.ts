@@ -3,6 +3,7 @@
  * 출처: Compositor `Crop`·`Gradient`·`ShapeTool`·`TypeTool`·`ColorPalette`·`CanvasViewport`.
  */
 import { editor } from '../editor/store'
+import type { RunStyle } from '@core/index'
 import { editPixels, trimToCanvas } from '../editor/pixels'
 import { renderText, DEFAULT_TEXT } from '../editor/text'
 import { cropDoc, getLayer, updateLayer, insertLayer, makeLayer, identityTransform, hitTransform, flattenDoc, type TextData, type Doc, type ShapeData } from '@core/index'
@@ -475,7 +476,11 @@ export function commitTextDraft(draft: TextDraft): void {
   } else editor.commit(insertLayer(doc, makeLayer('text', data.text.split('\n')[0].slice(0, 24) || '문자', bmp, t, { text: data })), '문자')
 }
 
-export const typeTool: ToolHandler & { onDraft?: (d: TextDraft | null) => void } = {
+/**
+ * 편집 중인 글에서 선택한 구간에 서식 넣기 — CanvasView 가 구현한다 (textarea 의 선택 범위를 안다).
+ * 선택이 없으면 false 를 돌려줘 호출측이 문자 전체 서식으로 처리한다.
+ */
+export const typeTool: ToolHandler & { onDraft?: (d: TextDraft | null) => void; onRunPatch?: (patch: Partial<RunStyle>) => boolean } = {
   down(c, p) {
     textDrag = { a: p.p }
     textBoxPreview = null

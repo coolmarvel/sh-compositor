@@ -9,7 +9,7 @@ const run = (m: RetouchMode, s: cpu.RetouchSession, a: { x: number; y: number },
   m === 'blur' ? ref.blurDab(s, b.x, b.y) : m === 'smudge' ? ref.smudgeDab(s, a, b) : ref.pushDab(s, a, b)
 for (const mode of modes)
   test(`retouch ${mode}: cropped CPU and Rust match original, edges, selection, repeated dabs`, async () => {
-    const wasm = await RetouchWasm.create(readFileSync('src/renderer/src/assets/retouch.wasm'))
+    const wasm = await RetouchWasm.create(readFileSync('src/renderer/src/assets/kernels.wasm'))
     try {
       for (const size of [1, 3, 19, 60])
         for (const hardness of [0, 0.8, 1]) {
@@ -59,7 +59,7 @@ test('snapshot copies a bounded patch even in a large document', () => {
 })
 
 test('Rust identity: zero strength or excluded selection never changes pixels', async () => {
-  const wasm = await RetouchWasm.create(readFileSync('src/renderer/src/assets/retouch.wasm'))
+  const wasm = await RetouchWasm.create(readFileSync('src/renderer/src/assets/kernels.wasm'))
   try {
     for (const mode of modes)
       for (const excluded of [false, true]) {
