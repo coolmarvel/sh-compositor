@@ -12,6 +12,14 @@ domain: development
 
 블록 형식: `## YYYY-MM-DD — 제목` 아래에 **요청/피드백 → 수정 → 검증 → 다음** 순서로 간결하게.
 
+## 2026-10-29 - 하네스 훅 입력 결함 수정 (코드·버전 변경 없음)
+
+- **요청**: project-seed 하네스 감사(2026-10-27, `audits/2026-10-27-harness-audit.md`) P0 를 로컬 프로젝트 전체에 반영. 사용자 지시로 커밋·푸시까지.
+- **원인**: 훅이 환경변수 `CLAUDE_TOOL_INPUT` 만 읽었는데 Claude Code 는 입력을 stdin JSON 으로 준다. 늘 빈 값이라 `.env` 편집 차단·`git add -A` 차단이 실제로는 exit 0 으로 통과했다 (합성 입력으로 재현).
+- **수정** (`scripts/hooks/`: env-guard.sh, format.sh, git-add-guard.sh, read-tool-input.py, test-hooks.sh): 공용 `read-tool-input.py` 가 stdin 의 `tool_input` 을 읽는다. git-add-guard 는 명령을 `;`·`&&`·`|`·줄바꿈 구간으로 나눠 `git add` 인자만 검사 (heredoc 본문 오탐 방지, `.env.example .env` 같이 넣기·`cd x && git add -A` 도 차단). 차단 사유는 stderr.
+- **검증**: `bash scripts/hooks/test-hooks.sh` 통과 (차단/허용 21건 + 옛 입력 방식 잔존 검사). 옛 훅에 같은 검사를 돌리면 13건 실패하는 것도 확인. 포맷 훅은 compact·pretty JSON 두 형식에서 경로 추출 확인. 제품 테스트·빌드는 훅만 바뀌어 미실행.
+- **주의**: 문자열 검사라 셸 우회(변수·eval)는 못 막는다. Claude 훅은 Codex 등 다른 도구에는 적용되지 않는다.
+
 ## 2026-09-28 — v1.2.1 AI 지우개(LaMa)·간편 AI 메뉴, v1.2.0 커밋·푸시
 
 **요청/피드백**: ① 마법봉으로 영역을 잡은 뒤 문지르기·흐리게·리퀴파이가 안 먹는다(개체 선택 W 뒤에는 된다). ② 갤럭시·구글·애플 AI 지우개처럼 빨간 형광펜으로 칠한 곳을 지우고 배경을 자연스럽게 채우는 기능,
